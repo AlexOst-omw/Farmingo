@@ -2,7 +2,7 @@
 ## Title: Farmingo
 ## Notes: Tracks mob loot, gold, and drop history for farming runs
 ## Author: _Alex_Ost_
-## Version: 1.0.3
+## Version: 1.0.4
 ## SavedVariables: FarmingoDB
 ## IconTexture: Interface\Icons\INV_Box_02
 

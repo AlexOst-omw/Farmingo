@@ -35,7 +35,6 @@ local currentViewMode = "mob"
 local ClearedSourcesThisWindow = {}
 local SourceLootNumberThisWindow = {}
 local CurrentLootWasAuto = false
-local CurrentLootHadClearedSlot = false
 local isSearchOpen = false
 local searchQuery = ""
 local SEARCH_PLACEHOLDER = "Search info..."
@@ -54,6 +53,10 @@ local EnsureDB
 local RefreshSettingsUI
 local RefreshFooterLayout
 local ProcessClearedLootSlot
+local UpdateToggleAllButton
+local UpdateFooterTotals
+local RenderPlaceView
+local RenderMobView
 local UpdateDisplay
 
 -- ============================================================================
@@ -186,7 +189,6 @@ local function SetCharacterProfile(profileName)
     wipe(RuntimeSeenSources)
 
     CurrentLootWasAuto = false
-    CurrentLootHadClearedSlot = false
 
     FarmingoSession = {
         mobs = {}
@@ -1013,7 +1015,6 @@ local function BuildPendingLoot()
 
     wipe(AttemptedLootSlots)
 
-    CurrentLootHadClearedSlot = false
     PendingLootSlots = {}
     ClearedSourcesThisWindow = {}
     SourceLootNumberThisWindow = {}
@@ -1064,9 +1065,6 @@ hooksecurefunc("LootSlot", function(slot)
 end)
 
 ProcessClearedLootSlot = function(slot)
-
-    CurrentLootHadClearedSlot = true
-
     EnsureDB()
 
     local slotData = PendingLootSlots[slot]
@@ -1303,6 +1301,100 @@ local function MobMatchesSearch(mobKey, data)
     end
 
     return false
+end
+
+-- ============================================================================
+-- 8.5 Place total helpers
+-- ============================================================================
+
+local function GetPlaceLootTotal(profileMobs, placeKey)
+    local total = 0
+
+    for _, data in pairs(profileMobs) do
+        if data.places and data.places[placeKey] then
+            total = total + data.places[placeKey]
+        end
+    end
+
+    return total
+end
+
+local function GetPlaceGoldTotal(profileMobs, placeKey)
+    local total = 0
+
+    for _, data in pairs(profileMobs) do
+        if data.places and data.places[placeKey] then
+            total = total + (data.gold or 0)
+        end
+    end
+
+    return total
+end
+
+local function GetGroupedLootTotal(groupedPlaces)
+    local total = 0
+
+    for placeKey, mobs in pairs(groupedPlaces) do
+        for _, mobData in pairs(mobs) do
+            if mobData.places and mobData.places[placeKey] then
+                total = total + mobData.places[placeKey]
+            end
+        end
+    end
+
+    return total
+end
+
+local function GetGroupedGoldTotal(groupedPlaces)
+    local total = 0
+
+    for placeKey, mobs in pairs(groupedPlaces) do
+        for _, mobData in pairs(mobs) do
+            if mobData.places and mobData.places[placeKey] then
+                total = total + (mobData.gold or 0)
+            end
+        end
+    end
+
+    return total
+end
+
+local function GetNestedGroupedLootTotal(nestedGroups)
+    local total = 0
+
+    for _, groupedPlaces in pairs(nestedGroups) do
+        total = total + GetGroupedLootTotal(groupedPlaces)
+    end
+
+    return total
+end
+
+local function GetNestedGroupedGoldTotal(nestedGroups)
+    local total = 0
+
+    for _, groupedPlaces in pairs(nestedGroups) do
+        total = total + GetGroupedGoldTotal(groupedPlaces)
+    end
+
+    return total
+end
+
+local function GetPlaceNameFromKey(placeKey)
+    local _, _, _, placeName = strsplit("|", placeKey)
+    return placeName or placeKey
+end
+
+local function SortKeysByLootTotal(keys, getTotal, getTieName)
+    table.sort(keys, function(a, b)
+        local totalA = getTotal(a)
+        local totalB = getTotal(b)
+
+        if totalA == totalB then
+            return getTieName(a) < getTieName(b)
+        end
+
+        return totalA > totalB
+    end)
 end
 
 -- ============================================================================
@@ -1557,7 +1649,7 @@ local profileHelpText = settingsContent:CreateFontString(nil, "OVERLAY", "GameFo
 profileHelpText:SetPoint("TOPLEFT", createButton, "BOTTOMLEFT", 2, -8)
 profileHelpText:SetWidth(260)
 profileHelpText:SetJustifyH("LEFT")
-profileHelpText:SetText("Profile store your farming data.")
+profileHelpText:SetText("Profiles store your farming data.")
 
 local profileDivider = settingsContent:CreateTexture(nil, "ARTWORK")
 profileDivider:SetHeight(1)
@@ -1969,7 +2061,6 @@ createButton:SetScript("OnClick", function()
             local ok, err = CreateProfile(text)
             if ok then
                 SetCharacterProfile(text)
-                wipe(GetProfileSeenSources())
                 RefreshSettingsUI()
                 RefreshFooterLayout()
                 UpdateDisplay()
@@ -1986,13 +2077,7 @@ createButton:SetScript("OnClick", function()
     StaticPopup_Show("FARMINGO_CREATE_PROFILE")
 end)
 
-UpdateDisplay = function()
-    EnsureDB()
-
-    local duplicateNameMap = BuildDuplicateMobNameMap()
-
-    local profileMobs = GetProfileMobs()
-
+UpdateToggleAllButton = function(profileMobs)
     if currentViewMode == "place" then
         local anyExpanded = false
 
@@ -2033,7 +2118,9 @@ UpdateDisplay = function()
             toggleAllButton:SetText("All")
         end
     end
+end
 
+UpdateFooterTotals = function(profileMobs)
     local totalGold = 0
     local totalLoots = 0
     local sessionTotalLoots = 0
@@ -2054,8 +2141,74 @@ UpdateDisplay = function()
     sessionGoldValue:SetText(FormatMoney(sessionTotalGold))
     totalLootsValue:SetText(totalLoots)
     totalGoldValue:SetText(FormatMoney(totalGold))
+end
 
-if currentViewMode == "place" then
+local function AddInfoRow(rowIndex, leftText, rightText)
+    local row = GetRow(rowIndex)
+    row:Show()
+    row.isMobRow = false
+    row.mobKey = nil
+    row.itemLink = nil
+    row.text:SetText(leftText or "")
+    row.countText:SetText(rightText or "")
+    row:SetScript("OnClick", nil)
+    row:SetScript("OnEnter", nil)
+    row:SetScript("OnLeave", function(self)
+        self.highlight:Hide()
+    end)
+
+    return rowIndex + 1
+end
+
+local function AddNoItemsRow(rowIndex, leftText)
+    local row = GetRow(rowIndex)
+    row:Show()
+    row.isMobRow = false
+    row.mobKey = nil
+    row.itemLink = nil
+    row.text:SetText(leftText or "|cff888888No items recorded|r")
+    row.countText:SetText("")
+    row:SetScript("OnClick", nil)
+    row:SetScript("OnEnter", function(self)
+        self.highlight:Show()
+    end)
+    row:SetScript("OnLeave", function(self)
+        self.highlight:Hide()
+    end)
+
+    return rowIndex + 1
+end
+
+local function AddItemRow(rowIndex, leftText, itemLink, firstDropLootCount, countText)
+    local row = GetRow(rowIndex)
+    row:Show()
+    row.isMobRow = false
+    row.mobKey = nil
+    row.itemLink = itemLink
+    row.firstDropLootCount = firstDropLootCount
+    row.text:SetText(leftText or "")
+    row.countText:SetText(countText or "")
+    row:SetScript("OnClick", nil)
+
+    row:SetScript("OnEnter", function(self)
+        self.highlight:Show()
+
+        if self.itemLink then
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetHyperlink(self.itemLink)
+            GameTooltip:Show()
+        end
+    end)
+
+    row:SetScript("OnLeave", function(self)
+        GameTooltip:Hide()
+        self.highlight:Hide()
+    end)
+
+    return rowIndex + 1
+end
+
+RenderPlaceView = function(profileMobs, duplicateNameMap)
     local placeData = {
         zones = {},
         dungeons = {},
@@ -2097,53 +2250,22 @@ if currentViewMode == "place" then
         table.insert(worldKeys, worldName)
     end
 
-    table.sort(worldKeys, function(a, b)
-        local totalA = 0
-        local totalB = 0
-
-        for _, continentData in pairs(placeData.zones[a]) do
-            for placeKey, mobs in pairs(continentData) do
-                for _, mobData in pairs(mobs) do
-                    if mobData.places and mobData.places[placeKey] then
-                        totalA = totalA + mobData.places[placeKey]
-                    end
-                end
-            end
+    SortKeysByLootTotal(
+        worldKeys,
+        function(worldName)
+            return GetNestedGroupedLootTotal(placeData.zones[worldName])
+        end,
+        function(worldName)
+            return worldName
         end
-
-        for _, continentData in pairs(placeData.zones[b]) do
-            for placeKey, mobs in pairs(continentData) do
-                for _, mobData in pairs(mobs) do
-                    if mobData.places and mobData.places[placeKey] then
-                        totalB = totalB + mobData.places[placeKey]
-                    end
-                end
-            end
-        end
-
-        if totalA == totalB then
-            return a < b
-        end
-
-        return totalA > totalB
-    end)
+    )
 
     local rowIndex = 1
 
     for _, worldName in ipairs(worldKeys) do
         local expandedWorld = FarmingoDB.ui.expandedWorlds[worldName]
 
-        local worldTotalLoots = 0
-
-        for _, continentData in pairs(placeData.zones[worldName]) do
-            for placeKey, mobs in pairs(continentData) do
-                for _, mobData in pairs(mobs) do
-                    if mobData.places and mobData.places[placeKey] then
-                        worldTotalLoots = worldTotalLoots + mobData.places[placeKey]
-                    end
-                end
-            end
-        end
+        local worldTotalLoots = GetNestedGroupedLootTotal(placeData.zones[worldName])
 
         local worldRow = GetRow(rowIndex)
         worldRow:Show()
@@ -2170,32 +2292,9 @@ if currentViewMode == "place" then
         rowIndex = rowIndex + 1
 
         if expandedWorld then
-            local worldTotalGold = 0
+            local worldTotalGold = GetNestedGroupedGoldTotal(placeData.zones[worldName])
 
-            for _, continentData in pairs(placeData.zones[worldName]) do
-                for placeKey, mobs in pairs(continentData) do
-                    for _, mobData in pairs(mobs) do
-                        if mobData.places and mobData.places[placeKey] then
-                            worldTotalGold = worldTotalGold + (mobData.gold or 0)
-                        end
-                    end
-                end
-            end
-
-            local goldRow = GetRow(rowIndex)
-            goldRow:Show()
-            goldRow.isMobRow = false
-            goldRow.mobKey = nil
-            goldRow.itemLink = nil
-            goldRow.text:SetText("    |cffd8b25dTotal gold:|r")
-            goldRow.countText:SetText(FormatMoney(worldTotalGold))
-            goldRow:SetScript("OnClick", nil)
-            goldRow:SetScript("OnEnter", nil)
-            goldRow:SetScript("OnLeave", function(self)
-                self.highlight:Hide()
-            end)
-
-            rowIndex = rowIndex + 1
+            rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(worldTotalGold))
 
             if placeData.zones[worldName]["__FLAT__"] then
                 local placeKeys = {}
@@ -2203,38 +2302,21 @@ if currentViewMode == "place" then
                     table.insert(placeKeys, placeKey)
                 end
 
-                table.sort(placeKeys, function(a, b)
-                    local totalA = 0
-                    local totalB = 0
-
-                    for _, data in pairs(profileMobs) do
-                        if data.places and data.places[a] then
-                            totalA = totalA + data.places[a]
-                        end
-                        if data.places and data.places[b] then
-                            totalB = totalB + data.places[b]
-                        end
+                SortKeysByLootTotal(
+                    placeKeys,
+                    function(placeKey)
+                        return GetPlaceLootTotal(profileMobs, placeKey)
+                    end,
+                    function(placeKey)
+                        return GetPlaceNameFromKey(placeKey)
                     end
-
-                    if totalA == totalB then
-                        local _, _, _, placeNameA = strsplit("|", a)
-                        local _, _, _, placeNameB = strsplit("|", b)
-                        return (placeNameA or a) < (placeNameB or b)
-                    end
-
-                    return totalA > totalB
-                end)
+                )
 
                 for _, placeKey in ipairs(placeKeys) do
                     local _, _, placeType, placeName = strsplit("|", placeKey)
                     local expandedPlace = FarmingoDB.ui.expandedPlaces[placeKey]
 
-                    local placeTotalLoots = 0
-                    for _, data in pairs(profileMobs) do
-                        if data.places and data.places[placeKey] then
-                            placeTotalLoots = placeTotalLoots + data.places[placeKey]
-                        end
-                    end
+                    local placeTotalLoots = GetPlaceLootTotal(profileMobs, placeKey)
 
                     local placeRow = GetRow(rowIndex)
                     placeRow:Show()
@@ -2261,28 +2343,9 @@ if currentViewMode == "place" then
 
                     if expandedPlace then
 
-                        local placeTotalGold = 0
+                        local placeTotalGold = GetPlaceGoldTotal(profileMobs, placeKey)
 
-                        for _, data in pairs(profileMobs) do
-                            if data.places and data.places[placeKey] then
-                                placeTotalGold = placeTotalGold + (data.gold or 0)
-                            end
-                        end
-
-                        local goldRow = GetRow(rowIndex)
-                        goldRow:Show()
-                        goldRow.isMobRow = false
-                        goldRow.mobKey = nil
-                        goldRow.itemLink = nil
-                        goldRow.text:SetText("        |cffd8b25dTotal gold:|r")
-                        goldRow.countText:SetText(FormatMoney(placeTotalGold))
-                        goldRow:SetScript("OnClick", nil)
-                        goldRow:SetScript("OnEnter", nil)
-                        goldRow:SetScript("OnLeave", function(self)
-                            self.highlight:Hide()
-                        end)
-
-                        rowIndex = rowIndex + 1
+                        rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(placeTotalGold))
 
                         local mobList = {}
 
@@ -2360,81 +2423,29 @@ if currentViewMode == "place" then
                                 table.sort(itemNames)
 
                                 if #itemNames == 0 then
-                                    local itemRow = GetRow(rowIndex)
-                                    itemRow:Show()
-                                    itemRow.isMobRow = false
-                                    itemRow.mobKey = nil
-                                    itemRow.itemLink = nil
-
-                                    itemRow.text:SetText("            |cff888888No items recorded|r")
-                                    itemRow.countText:SetText("")
-
-                                    itemRow:SetScript("OnClick", nil)
-                                    itemRow:SetScript("OnEnter", function(self)
-                                        self.highlight:Show()
-                                    end)
-                                    itemRow:SetScript("OnLeave", function(self)
-                                        self.highlight:Hide()
-                                    end)
-
-                                    rowIndex = rowIndex + 1
+                                    rowIndex = AddNoItemsRow(rowIndex, "    |cff888888No items recorded|r")
                                 else
                                     for _, itemName in ipairs(itemNames) do
                                         local itemData = mobData.items[itemName]
-
-                                        local itemRow = GetRow(rowIndex)
-                                        itemRow:Show()
-                                        itemRow.isMobRow = false
-                                        itemRow.mobKey = nil
-                                        itemRow.itemLink = itemData.link
-                                        itemRow.firstDropLootCount = itemData.firstDropLootCount
 
                                         local itemText = itemData.link or itemName
                                         if searchQuery ~= "" and not itemData.link then
                                             itemText = HighlightSearchMatch(itemText)
                                         end
 
-                                        itemRow.text:SetText("            " .. itemText)
-                                        itemRow.countText:SetText("x" .. tostring(itemData.count or 0))
-                                        itemRow:SetScript("OnClick", nil)
-
-                                        itemRow:SetScript("OnEnter", function(self)
-                                            self.highlight:Show()
-
-                                            if self.itemLink then
-                                                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                                                GameTooltip:SetHyperlink(self.itemLink)
-                                                GameTooltip:Show()
-                                            end
-                                        end)
-
-                                        itemRow:SetScript("OnLeave", function(self)
-                                            GameTooltip:Hide()
-                                            self.highlight:Hide()
-                                        end)
-
-                                        rowIndex = rowIndex + 1
+                                        rowIndex = AddItemRow(
+                                            rowIndex,
+                                            "                " .. itemText,
+                                            itemData.link,
+                                            itemData.firstDropLootCount,
+                                            "x" .. tostring(itemData.count or 0)
+                                        )
                                     end
                                 end
 
                                 local mobGold = mobData.gold or 0
                                 if mobGold > 0 then
-                                    local goldRow = GetRow(rowIndex)
-                                    goldRow:Show()
-                                    goldRow.isMobRow = false
-                                    goldRow.mobKey = nil
-                                    goldRow.itemLink = nil
-
-                                    goldRow.text:SetText("            |cffd8b25dTotal gold:|r")
-                                    goldRow.countText:SetText(FormatMoney(mobGold))
-
-                                    goldRow:SetScript("OnClick", nil)
-                                    goldRow:SetScript("OnEnter", nil)
-                                    goldRow:SetScript("OnLeave", function(self)
-                                        self.highlight:Hide()
-                                    end)
-
-                                    rowIndex = rowIndex + 1
+                                    rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(mobGold))
                                 end
 
                                 local sessionData = FarmingoSession.mobs[mobKey]
@@ -2451,7 +2462,7 @@ if currentViewMode == "place" then
                                 sessionRow.isMobRow = false
                                 sessionRow.mobKey = nil
                                 sessionRow.itemLink = nil
-                                sessionRow.text:SetText("            |cff66ccffThis session loots:|r")
+                                sessionRow.text:SetText("    |cff66ccffThis session loots:|r")
                                 sessionRow.countText:SetText("|cff66ccff" .. sessionLootCount .. " loots|r")
                                 sessionRow:SetScript("OnClick", nil)
                                 sessionRow:SetScript("OnEnter", nil)
@@ -2467,7 +2478,7 @@ if currentViewMode == "place" then
                                     sessionGoldRow.isMobRow = false
                                     sessionGoldRow.mobKey = nil
                                     sessionGoldRow.itemLink = nil
-                                    sessionGoldRow.text:SetText("            |cff66ccffThis session gold:|r")
+                                    sessionGoldRow.text:SetText("    |cff66ccffThis session gold:|r")
                                     sessionGoldRow.countText:SetText("|cffffffff" .. FormatMoney(sessionGold) .. "|r")
                                     sessionGoldRow:SetScript("OnClick", nil)
                                     sessionGoldRow:SetScript("OnEnter", nil)
@@ -2489,44 +2500,21 @@ if currentViewMode == "place" then
                 end
             end
 
-            table.sort(continentKeys, function(a, b)
-                local totalA = 0
-                local totalB = 0
-
-                for placeKey, mobs in pairs(placeData.zones[worldName][a]) do
-                    for _, mobData in pairs(mobs) do
-                        if mobData.places and mobData.places[placeKey] then
-                            totalA = totalA + mobData.places[placeKey]
-                        end
-                    end
+            SortKeysByLootTotal(
+                continentKeys,
+                function(continentName)
+                    return GetGroupedLootTotal(placeData.zones[worldName][continentName])
+                end,
+                function(continentName)
+                    return continentName
                 end
-
-                for placeKey, mobs in pairs(placeData.zones[worldName][b]) do
-                    for _, mobData in pairs(mobs) do
-                        if mobData.places and mobData.places[placeKey] then
-                            totalB = totalB + mobData.places[placeKey]
-                        end
-                    end
-                end
-
-                if totalA == totalB then
-                    return a < b
-                end
-
-                return totalA > totalB
-            end)
+            )
 
             for _, continentName in ipairs(continentKeys) do
                 local expandedContinent = FarmingoDB.ui.expandedContinents[continentName]
 
-                local continentTotalLoots = 0
-                for placeKey, mobs in pairs(placeData.zones[worldName][continentName]) do
-                    for _, mobData in pairs(mobs) do
-                        if mobData.places and mobData.places[placeKey] then
-                            continentTotalLoots = continentTotalLoots + mobData.places[placeKey]
-                        end
-                    end
-                end
+                local continentTotalLoots = GetGroupedLootTotal(placeData.zones[worldName][continentName])
+
                 local continentRow = GetRow(rowIndex)
                 continentRow:Show()
                 continentRow.isMobRow = false
@@ -2552,68 +2540,30 @@ if currentViewMode == "place" then
 
                 if expandedContinent then
 
-                    local continentTotalGold = 0
+                    local continentTotalGold = GetGroupedGoldTotal(placeData.zones[worldName][continentName])
 
-                    for placeKey, mobs in pairs(placeData.zones[worldName][continentName]) do
-                        for _, mobData in pairs(mobs) do
-                            if mobData.places and mobData.places[placeKey] then
-                                continentTotalGold = continentTotalGold + (mobData.gold or 0)
-                            end
-                        end
-                    end
-
-                    local goldRow = GetRow(rowIndex)
-                    goldRow:Show()
-                    goldRow.isMobRow = false
-                    goldRow.mobKey = nil
-                    goldRow.itemLink = nil
-                    goldRow.text:SetText("        |cffd8b25dTotal gold:|r")
-                    goldRow.countText:SetText(FormatMoney(continentTotalGold))
-                    goldRow:SetScript("OnClick", nil)
-                    goldRow:SetScript("OnEnter", nil)
-                    goldRow:SetScript("OnLeave", function(self)
-                        self.highlight:Hide()
-                    end)
-
-                    rowIndex = rowIndex + 1
+                    rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(continentTotalGold))
 
                     local placeKeys = {}
                     for placeKey in pairs(placeData.zones[worldName][continentName]) do
                         table.insert(placeKeys, placeKey)
                     end
 
-                    table.sort(placeKeys, function(a, b)
-                        local totalA = 0
-                        local totalB = 0
-
-                        for _, data in pairs(profileMobs) do
-                            if data.places and data.places[a] then
-                                totalA = totalA + data.places[a]
-                            end
-                            if data.places and data.places[b] then
-                                totalB = totalB + data.places[b]
-                            end
+                    SortKeysByLootTotal(
+                        placeKeys,
+                        function(placeKey)
+                            return GetPlaceLootTotal(profileMobs, placeKey)
+                        end,
+                        function(placeKey)
+                            return GetPlaceNameFromKey(placeKey)
                         end
-
-                        if totalA == totalB then
-                            local _, _, _, placeNameA = strsplit("|", a)
-                            local _, _, _, placeNameB = strsplit("|", b)
-                            return (placeNameA or a) < (placeNameB or b)
-                        end
-
-                        return totalA > totalB
-                    end)
+                    )
 
                     for _, placeKey in ipairs(placeKeys) do
                         local _, _, placeType, placeName = strsplit("|", placeKey)
                         local expandedPlace = FarmingoDB.ui.expandedPlaces[placeKey]
 
-                        local placeTotalLoots = 0
-                        for _, data in pairs(profileMobs) do
-                            if data.places and data.places[placeKey] then
-                                placeTotalLoots = placeTotalLoots + data.places[placeKey]
-                            end
-                        end
+                        local placeTotalLoots = GetPlaceLootTotal(profileMobs, placeKey)
 
                         local placeRow = GetRow(rowIndex)
                         placeRow:Show()
@@ -2640,28 +2590,9 @@ if currentViewMode == "place" then
 
                         if expandedPlace then
 
-                            local placeTotalGold = 0
+                            local placeTotalGold = GetPlaceGoldTotal(profileMobs, placeKey)
 
-                            for _, data in pairs(profileMobs) do
-                                if data.places and data.places[placeKey] then
-                                    placeTotalGold = placeTotalGold + (data.gold or 0)
-                                end
-                            end
-
-                            local goldRow = GetRow(rowIndex)
-                            goldRow:Show()
-                            goldRow.isMobRow = false
-                            goldRow.mobKey = nil
-                            goldRow.itemLink = nil
-                            goldRow.text:SetText("            |cffd8b25dTotal gold:|r")
-                            goldRow.countText:SetText(FormatMoney(placeTotalGold))
-                            goldRow:SetScript("OnClick", nil)
-                            goldRow:SetScript("OnEnter", nil)
-                            goldRow:SetScript("OnLeave", function(self)
-                                self.highlight:Hide()
-                            end)
-
-                            rowIndex = rowIndex + 1
+                            rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(placeTotalGold))
 
                             local mobList = {}
                             for mobKey, mobData in pairs(placeData.zones[worldName][continentName][placeKey]) do
@@ -2738,81 +2669,29 @@ if currentViewMode == "place" then
                                     table.sort(itemNames)
 
                                     if #itemNames == 0 then
-                                        local itemRow = GetRow(rowIndex)
-                                        itemRow:Show()
-                                        itemRow.isMobRow = false
-                                        itemRow.mobKey = nil
-                                        itemRow.itemLink = nil
-
-                                        itemRow.text:SetText("                |cff888888No items recorded|r")
-                                        itemRow.countText:SetText("")
-
-                                        itemRow:SetScript("OnClick", nil)
-                                        itemRow:SetScript("OnEnter", function(self)
-                                            self.highlight:Show()
-                                        end)
-                                        itemRow:SetScript("OnLeave", function(self)
-                                            self.highlight:Hide()
-                                        end)
-
-                                        rowIndex = rowIndex + 1
+                                        rowIndex = AddNoItemsRow(rowIndex, "    |cff888888No items recorded|r")
                                     else
                                         for _, itemName in ipairs(itemNames) do
                                             local itemData = mobData.items[itemName]
-
-                                            local itemRow = GetRow(rowIndex)
-                                            itemRow:Show()
-                                            itemRow.isMobRow = false
-                                            itemRow.mobKey = nil
-                                            itemRow.itemLink = itemData.link
-                                            itemRow.firstDropLootCount = itemData.firstDropLootCount
 
                                             local itemText = itemData.link or itemName
                                             if searchQuery ~= "" and not itemData.link then
                                                 itemText = HighlightSearchMatch(itemText)
                                             end
 
-                                            itemRow.text:SetText("                " .. itemText)
-                                            itemRow.countText:SetText("x" .. tostring(itemData.count or 0))
-                                            itemRow:SetScript("OnClick", nil)
-
-                                            itemRow:SetScript("OnEnter", function(self)
-                                                self.highlight:Show()
-
-                                                if self.itemLink then
-                                                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                                                    GameTooltip:SetHyperlink(self.itemLink)
-                                                    GameTooltip:Show()
-                                                end
-                                            end)
-
-                                            itemRow:SetScript("OnLeave", function(self)
-                                                GameTooltip:Hide()
-                                                self.highlight:Hide()
-                                            end)
-
-                                            rowIndex = rowIndex + 1
+                                            rowIndex = AddItemRow(
+                                                rowIndex,
+                                                "                " .. itemText,
+                                                itemData.link,
+                                                itemData.firstDropLootCount,
+                                                "x" .. tostring(itemData.count or 0)
+                                            )
                                         end
                                     end
 
                                     local mobGold = mobData.gold or 0
                                     if mobGold > 0 then
-                                        local goldRow = GetRow(rowIndex)
-                                        goldRow:Show()
-                                        goldRow.isMobRow = false
-                                        goldRow.mobKey = nil
-                                        goldRow.itemLink = nil
-
-                                        goldRow.text:SetText("                |cffd8b25dTotal gold:|r")
-                                        goldRow.countText:SetText(FormatMoney(mobGold))
-
-                                        goldRow:SetScript("OnClick", nil)
-                                        goldRow:SetScript("OnEnter", nil)
-                                        goldRow:SetScript("OnLeave", function(self)
-                                            self.highlight:Hide()
-                                        end)
-
-                                        rowIndex = rowIndex + 1
+                                        rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(mobGold))
                                     end
 
                                     local sessionData = FarmingoSession.mobs[mobKey]
@@ -2829,7 +2708,7 @@ if currentViewMode == "place" then
                                     sessionRow.isMobRow = false
                                     sessionRow.mobKey = nil
                                     sessionRow.itemLink = nil
-                                    sessionRow.text:SetText("                |cff66ccffThis session loots:|r")
+                                    sessionRow.text:SetText("    |cff66ccffThis session loots:|r")
                                     sessionRow.countText:SetText("|cff66ccff" .. sessionLootCount .. " loots|r")
                                     sessionRow:SetScript("OnClick", nil)
                                     sessionRow:SetScript("OnEnter", nil)
@@ -2845,7 +2724,7 @@ if currentViewMode == "place" then
                                         sessionGoldRow.isMobRow = false
                                         sessionGoldRow.mobKey = nil
                                         sessionGoldRow.itemLink = nil
-                                        sessionGoldRow.text:SetText("                |cff66ccffThis session gold:|r")
+                                        sessionGoldRow.text:SetText("    |cff66ccffThis session gold:|r")
                                         sessionGoldRow.countText:SetText("|cffffffff" .. FormatMoney(sessionGold) .. "|r")
                                         sessionGoldRow:SetScript("OnClick", nil)
                                         sessionGoldRow:SetScript("OnEnter", nil)
@@ -2869,41 +2748,26 @@ if currentViewMode == "place" then
         table.insert(dungeonKeys, placeKey)
     end
 
-    table.sort(dungeonKeys, function(a, b)
-        local totalA = 0
-        local totalB = 0
-
-        for _, mobData in pairs(placeData.dungeons[a]) do
-            if mobData.places and mobData.places[a] then
-                totalA = totalA + mobData.places[a]
-            end
+    SortKeysByLootTotal(
+        dungeonKeys,
+        function(placeKey)
+            return GetGroupedLootTotal({
+                [placeKey] = placeData.dungeons[placeKey]
+            })
+        end,
+        function(placeKey)
+            return GetPlaceNameFromKey(placeKey)
         end
-
-        for _, mobData in pairs(placeData.dungeons[b]) do
-            if mobData.places and mobData.places[b] then
-                totalB = totalB + mobData.places[b]
-            end
-        end
-
-        if totalA == totalB then
-            local _, _, _, placeNameA = strsplit("|", a)
-            local _, _, _, placeNameB = strsplit("|", b)
-            return (placeNameA or a) < (placeNameB or b)
-        end
-
-        return totalA > totalB
-    end)
+    )
 
     if #dungeonKeys > 0 then
         local expandedDungeons = FarmingoDB.ui.expandedWorlds["Dungeons"]
 
         local dungeonsTotalLoots = 0
         for _, placeKey in ipairs(dungeonKeys) do
-            for _, mobData in pairs(placeData.dungeons[placeKey]) do
-                if mobData.places and mobData.places[placeKey] then
-                    dungeonsTotalLoots = dungeonsTotalLoots + mobData.places[placeKey]
-                end
-            end
+            dungeonsTotalLoots = dungeonsTotalLoots + GetGroupedLootTotal({
+                [placeKey] = placeData.dungeons[placeKey]
+            })
         end
 
         local dungeonsRow = GetRow(rowIndex)
@@ -2931,40 +2795,19 @@ if currentViewMode == "place" then
         if expandedDungeons then
 
             local dungeonsTotalGold = 0
-
             for _, placeKey in ipairs(dungeonKeys) do
-                for _, mobData in pairs(placeData.dungeons[placeKey]) do
-                    if mobData.places and mobData.places[placeKey] then
-                        dungeonsTotalGold = dungeonsTotalGold + (mobData.gold or 0)
-                    end
-                end
+                dungeonsTotalGold = dungeonsTotalGold + GetGroupedGoldTotal({
+                    [placeKey] = placeData.dungeons[placeKey]
+                })
             end
 
-            local goldRow = GetRow(rowIndex)
-            goldRow:Show()
-            goldRow.isMobRow = false
-            goldRow.mobKey = nil
-            goldRow.itemLink = nil
-            goldRow.text:SetText("    |cffd8b25dTotal gold:|r")
-            goldRow.countText:SetText(FormatMoney(dungeonsTotalGold))
-            goldRow:SetScript("OnClick", nil)
-            goldRow:SetScript("OnEnter", nil)
-            goldRow:SetScript("OnLeave", function(self)
-                self.highlight:Hide()
-            end)
-
-            rowIndex = rowIndex + 1
+            rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(dungeonsTotalGold))
 
             for _, placeKey in ipairs(dungeonKeys) do
                 local _, _, _, placeName = strsplit("|", placeKey)
                 local expandedPlace = FarmingoDB.ui.expandedPlaces[placeKey]
 
-                local placeTotalLoots = 0
-                for _, mobData in pairs(placeData.dungeons[placeKey]) do
-                    if mobData.places and mobData.places[placeKey] then
-                        placeTotalLoots = placeTotalLoots + mobData.places[placeKey]
-                    end
-                end
+                local placeTotalLoots = GetPlaceLootTotal(profileMobs, placeKey)
 
                 local placeRow = GetRow(rowIndex)
                 placeRow:Show()
@@ -2990,28 +2833,9 @@ if currentViewMode == "place" then
 
                 if expandedPlace then
 
-                    local placeTotalGold = 0
+                    local placeTotalGold = GetPlaceGoldTotal(profileMobs, placeKey)
 
-                    for _, mobData in pairs(placeData.dungeons[placeKey]) do
-                        if mobData.places and mobData.places[placeKey] then
-                            placeTotalGold = placeTotalGold + (mobData.gold or 0)
-                        end
-                    end
-
-                    local goldRow = GetRow(rowIndex)
-                    goldRow:Show()
-                    goldRow.isMobRow = false
-                    goldRow.mobKey = nil
-                    goldRow.itemLink = nil
-                    goldRow.text:SetText("        |cffd8b25dTotal gold:|r")
-                    goldRow.countText:SetText(FormatMoney(placeTotalGold))
-                    goldRow:SetScript("OnClick", nil)
-                    goldRow:SetScript("OnEnter", nil)
-                    goldRow:SetScript("OnLeave", function(self)
-                        self.highlight:Hide()
-                    end)
-
-                    rowIndex = rowIndex + 1
+                    rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(placeTotalGold))
 
                     local mobList = {}
 
@@ -3088,81 +2912,29 @@ if currentViewMode == "place" then
                             table.sort(itemNames)
 
                             if #itemNames == 0 then
-                                local itemRow = GetRow(rowIndex)
-                                itemRow:Show()
-                                itemRow.isMobRow = false
-                                itemRow.mobKey = nil
-                                itemRow.itemLink = nil
-
-                                itemRow.text:SetText("            |cff888888No items recorded|r")
-                                itemRow.countText:SetText("")
-
-                                itemRow:SetScript("OnClick", nil)
-                                itemRow:SetScript("OnEnter", function(self)
-                                    self.highlight:Show()
-                                end)
-                                itemRow:SetScript("OnLeave", function(self)
-                                    self.highlight:Hide()
-                                end)
-
-                                rowIndex = rowIndex + 1
+                                rowIndex = AddNoItemsRow(rowIndex, "    |cff888888No items recorded|r")
                             else
                                 for _, itemName in ipairs(itemNames) do
                                     local itemData = mobData.items[itemName]
-
-                                    local itemRow = GetRow(rowIndex)
-                                    itemRow:Show()
-                                    itemRow.isMobRow = false
-                                    itemRow.mobKey = nil
-                                    itemRow.itemLink = itemData.link
-                                    itemRow.firstDropLootCount = itemData.firstDropLootCount
 
                                     local itemText = itemData.link or itemName
                                     if searchQuery ~= "" and not itemData.link then
                                         itemText = HighlightSearchMatch(itemText)
                                     end
 
-                                    itemRow.text:SetText("            " .. itemText)
-                                    itemRow.countText:SetText("x" .. tostring(itemData.count or 0))
-                                    itemRow:SetScript("OnClick", nil)
-
-                                    itemRow:SetScript("OnEnter", function(self)
-                                        self.highlight:Show()
-
-                                        if self.itemLink then
-                                            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                                            GameTooltip:SetHyperlink(self.itemLink)
-                                            GameTooltip:Show()
-                                        end
-                                    end)
-
-                                    itemRow:SetScript("OnLeave", function(self)
-                                        GameTooltip:Hide()
-                                        self.highlight:Hide()
-                                    end)
-
-                                    rowIndex = rowIndex + 1
+                                    rowIndex = AddItemRow(
+                                        rowIndex,
+                                        "            " .. itemText,
+                                        itemData.link,
+                                        itemData.firstDropLootCount,
+                                        "x" .. tostring(itemData.count or 0)
+                                    )
                                 end
                             end
 
                             local mobGold = mobData.gold or 0
                             if mobGold > 0 then
-                                local goldRow = GetRow(rowIndex)
-                                goldRow:Show()
-                                goldRow.isMobRow = false
-                                goldRow.mobKey = nil
-                                goldRow.itemLink = nil
-
-                                goldRow.text:SetText("            |cffd8b25dTotal gold:|r")
-                                goldRow.countText:SetText(FormatMoney(mobGold))
-
-                                goldRow:SetScript("OnClick", nil)
-                                goldRow:SetScript("OnEnter", nil)
-                                goldRow:SetScript("OnLeave", function(self)
-                                    self.highlight:Hide()
-                                end)
-
-                                rowIndex = rowIndex + 1
+                                rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(mobGold))
                             end
 
                             local sessionData = FarmingoSession.mobs[mobKey]
@@ -3179,7 +2951,7 @@ if currentViewMode == "place" then
                             sessionRow.isMobRow = false
                             sessionRow.mobKey = nil
                             sessionRow.itemLink = nil
-                            sessionRow.text:SetText("            |cff66ccffThis session loots:|r")
+                            sessionRow.text:SetText("    |cff66ccffThis session loots:|r")
                             sessionRow.countText:SetText("|cff66ccff" .. sessionLootCount .. " loots|r")
                             sessionRow:SetScript("OnClick", nil)
                             sessionRow:SetScript("OnEnter", nil)
@@ -3195,7 +2967,7 @@ if currentViewMode == "place" then
                                 sessionGoldRow.isMobRow = false
                                 sessionGoldRow.mobKey = nil
                                 sessionGoldRow.itemLink = nil
-                                sessionGoldRow.text:SetText("            |cff66ccffThis session gold:|r")
+                                sessionGoldRow.text:SetText("    |cff66ccffThis session gold:|r")
                                 sessionGoldRow.countText:SetText("|cffffffff" .. FormatMoney(sessionGold) .. "|r")
                                 sessionGoldRow:SetScript("OnClick", nil)
                                 sessionGoldRow:SetScript("OnEnter", nil)
@@ -3217,41 +2989,26 @@ if currentViewMode == "place" then
         table.insert(raidKeys, placeKey)
     end
 
-    table.sort(raidKeys, function(a, b)
-        local totalA = 0
-        local totalB = 0
-
-        for _, mobData in pairs(placeData.raids[a]) do
-            if mobData.places and mobData.places[a] then
-                totalA = totalA + mobData.places[a]
-            end
+    SortKeysByLootTotal(
+        raidKeys,
+        function(placeKey)
+            return GetGroupedLootTotal({
+                [placeKey] = placeData.raids[placeKey]
+            })
+        end,
+        function(placeKey)
+            return GetPlaceNameFromKey(placeKey)
         end
-
-        for _, mobData in pairs(placeData.raids[b]) do
-            if mobData.places and mobData.places[b] then
-                totalB = totalB + mobData.places[b]
-            end
-        end
-
-        if totalA == totalB then
-            local _, _, _, placeNameA = strsplit("|", a)
-            local _, _, _, placeNameB = strsplit("|", b)
-            return (placeNameA or a) < (placeNameB or b)
-        end
-
-        return totalA > totalB
-    end)
+    )
 
     if #raidKeys > 0 then
         local expandedRaids = FarmingoDB.ui.expandedWorlds["Raids"]
 
         local raidsTotalLoots = 0
         for _, placeKey in ipairs(raidKeys) do
-            for _, mobData in pairs(placeData.raids[placeKey]) do
-                if mobData.places and mobData.places[placeKey] then
-                    raidsTotalLoots = raidsTotalLoots + mobData.places[placeKey]
-                end
-            end
+            raidsTotalLoots = raidsTotalLoots + GetGroupedLootTotal({
+                [placeKey] = placeData.raids[placeKey]
+            })
         end
 
         local raidsRow = GetRow(rowIndex)
@@ -3279,40 +3036,19 @@ if currentViewMode == "place" then
         if expandedRaids then
 
             local raidsTotalGold = 0
-
             for _, placeKey in ipairs(raidKeys) do
-                for _, mobData in pairs(placeData.raids[placeKey]) do
-                    if mobData.places and mobData.places[placeKey] then
-                        raidsTotalGold = raidsTotalGold + (mobData.gold or 0)
-                    end
-                end
+                raidsTotalGold = raidsTotalGold + GetGroupedGoldTotal({
+                    [placeKey] = placeData.raids[placeKey]
+                })
             end
 
-            local goldRow = GetRow(rowIndex)
-            goldRow:Show()
-            goldRow.isMobRow = false
-            goldRow.mobKey = nil
-            goldRow.itemLink = nil
-            goldRow.text:SetText("    |cffd8b25dTotal gold:|r")
-            goldRow.countText:SetText(FormatMoney(raidsTotalGold))
-            goldRow:SetScript("OnClick", nil)
-            goldRow:SetScript("OnEnter", nil)
-            goldRow:SetScript("OnLeave", function(self)
-                self.highlight:Hide()
-            end)
-
-            rowIndex = rowIndex + 1
+            rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(raidsTotalGold))
 
             for _, placeKey in ipairs(raidKeys) do
                 local _, _, _, placeName = strsplit("|", placeKey)
                 local expandedPlace = FarmingoDB.ui.expandedPlaces[placeKey]
 
-                local placeTotalLoots = 0
-                for _, mobData in pairs(placeData.raids[placeKey]) do
-                    if mobData.places and mobData.places[placeKey] then
-                        placeTotalLoots = placeTotalLoots + mobData.places[placeKey]
-                    end
-                end
+                local placeTotalLoots = GetPlaceLootTotal(profileMobs, placeKey)
 
                 local placeRow = GetRow(rowIndex)
                 placeRow:Show()
@@ -3338,28 +3074,9 @@ if currentViewMode == "place" then
 
                 if expandedPlace then
 
-                    local placeTotalGold = 0
+                    local placeTotalGold = GetPlaceGoldTotal(profileMobs, placeKey)
 
-                    for _, mobData in pairs(placeData.raids[placeKey]) do
-                        if mobData.places and mobData.places[placeKey] then
-                            placeTotalGold = placeTotalGold + (mobData.gold or 0)
-                        end
-                    end
-
-                    local goldRow = GetRow(rowIndex)
-                    goldRow:Show()
-                    goldRow.isMobRow = false
-                    goldRow.mobKey = nil
-                    goldRow.itemLink = nil
-                    goldRow.text:SetText("        |cffd8b25dTotal gold:|r")
-                    goldRow.countText:SetText(FormatMoney(placeTotalGold))
-                    goldRow:SetScript("OnClick", nil)
-                    goldRow:SetScript("OnEnter", nil)
-                    goldRow:SetScript("OnLeave", function(self)
-                        self.highlight:Hide()
-                    end)
-
-                    rowIndex = rowIndex + 1
+                    rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(placeTotalGold))
 
                     local mobList = {}
 
@@ -3436,81 +3153,29 @@ if currentViewMode == "place" then
                             table.sort(itemNames)
 
                             if #itemNames == 0 then
-                                local itemRow = GetRow(rowIndex)
-                                itemRow:Show()
-                                itemRow.isMobRow = false
-                                itemRow.mobKey = nil
-                                itemRow.itemLink = nil
-
-                                itemRow.text:SetText("            |cff888888No items recorded|r")
-                                itemRow.countText:SetText("")
-
-                                itemRow:SetScript("OnClick", nil)
-                                itemRow:SetScript("OnEnter", function(self)
-                                    self.highlight:Show()
-                                end)
-                                itemRow:SetScript("OnLeave", function(self)
-                                    self.highlight:Hide()
-                                end)
-
-                                rowIndex = rowIndex + 1
+                                rowIndex = AddNoItemsRow(rowIndex, "    |cff888888No items recorded|r")
                             else
                                 for _, itemName in ipairs(itemNames) do
                                     local itemData = mobData.items[itemName]
-
-                                    local itemRow = GetRow(rowIndex)
-                                    itemRow:Show()
-                                    itemRow.isMobRow = false
-                                    itemRow.mobKey = nil
-                                    itemRow.itemLink = itemData.link
-                                    itemRow.firstDropLootCount = itemData.firstDropLootCount
 
                                     local itemText = itemData.link or itemName
                                     if searchQuery ~= "" and not itemData.link then
                                         itemText = HighlightSearchMatch(itemText)
                                     end
 
-                                    itemRow.text:SetText("                " .. itemText)
-                                    itemRow.countText:SetText("x" .. tostring(itemData.count or 0))
-                                    itemRow:SetScript("OnClick", nil)
-
-                                    itemRow:SetScript("OnEnter", function(self)
-                                        self.highlight:Show()
-
-                                        if self.itemLink then
-                                            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                                            GameTooltip:SetHyperlink(self.itemLink)
-                                            GameTooltip:Show()
-                                        end
-                                    end)
-
-                                    itemRow:SetScript("OnLeave", function(self)
-                                        GameTooltip:Hide()
-                                        self.highlight:Hide()
-                                    end)
-
-                                    rowIndex = rowIndex + 1
+                                    rowIndex = AddItemRow(
+                                        rowIndex,
+                                        "            " .. itemText,
+                                        itemData.link,
+                                        itemData.firstDropLootCount,
+                                        "x" .. tostring(itemData.count or 0)
+                                    )
                                 end
                             end
 
                             local mobGold = mobData.gold or 0
                             if mobGold > 0 then
-                                local goldRow = GetRow(rowIndex)
-                                goldRow:Show()
-                                goldRow.isMobRow = false
-                                goldRow.mobKey = nil
-                                goldRow.itemLink = nil
-
-                                goldRow.text:SetText("              |cffd8b25dTotal gold:|r")
-                                goldRow.countText:SetText(FormatMoney(mobGold))
-
-                                goldRow:SetScript("OnClick", nil)
-                                goldRow:SetScript("OnEnter", nil)
-                                goldRow:SetScript("OnLeave", function(self)
-                                    self.highlight:Hide()
-                                end)
-
-                                rowIndex = rowIndex + 1
+                                rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(mobGold))
                             end
 
                             local sessionData = FarmingoSession.mobs[mobKey]
@@ -3527,7 +3192,7 @@ if currentViewMode == "place" then
                             sessionRow.isMobRow = false
                             sessionRow.mobKey = nil
                             sessionRow.itemLink = nil
-                            sessionRow.text:SetText("              |cff66ccffThis session loots:|r")
+                            sessionRow.text:SetText("    |cff66ccffThis session loots:|r")
                             sessionRow.countText:SetText("|cff66ccff" .. sessionLootCount .. " loots|r")
                             sessionRow:SetScript("OnClick", nil)
                             sessionRow:SetScript("OnEnter", nil)
@@ -3543,7 +3208,7 @@ if currentViewMode == "place" then
                                 sessionGoldRow.isMobRow = false
                                 sessionGoldRow.mobKey = nil
                                 sessionGoldRow.itemLink = nil
-                                sessionGoldRow.text:SetText("              |cff66ccffThis session gold:|r")
+                                sessionGoldRow.text:SetText("    |cff66ccffThis session gold:|r")
                                 sessionGoldRow.countText:SetText("|cffffffff" .. FormatMoney(sessionGold) .. "|r")
                                 sessionGoldRow:SetScript("OnClick", nil)
                                 sessionGoldRow:SetScript("OnEnter", nil)
@@ -3572,6 +3237,7 @@ if currentViewMode == "place" then
     return
 end
 
+RenderMobView = function(profileMobs, duplicateNameMap)
     local mobList = {}
     for mobKey, data in pairs(profileMobs) do
         if MobMatchesSearch(mobKey, data) then
@@ -3658,74 +3324,29 @@ end
                 table.sort(itemNames)
 
                 if #itemNames == 0 then
-                    local itemRow = GetRow(rowIndex)
-                    itemRow:Show()
-                    itemRow.isMobRow = false
-                    itemRow.mobName = nil
-                    itemRow.itemLink = nil
-                    itemRow.text:SetText("    |cff888888No items recorded|r")
-                    itemRow.countText:SetText("")
-                    itemRow:SetScript("OnClick", nil)
-                    itemRow:SetScript("OnEnter", nil)
-                    itemRow:SetScript("OnLeave", function(self)
-                        self.highlight:Hide()
-                    end)
-                    rowIndex = rowIndex + 1
+                    rowIndex = AddNoItemsRow(rowIndex, "      |cff888888No items recorded|r")
                 else
                     for _, itemName in ipairs(itemNames) do
-                        local itemRow = GetRow(rowIndex)
                         local itemData = data.items[itemName]
 
-                        itemRow:Show()
-                        itemRow.isMobRow = false
-                        itemRow.mobName = nil
-                        itemRow.itemLink = itemData.link
-                        itemRow.firstDropLootCount = itemData.firstDropLootCount
-
                         local itemText = itemData.link or itemName
-
                         if searchQuery ~= "" and not itemData.link then
                             itemText = HighlightSearchMatch(itemText)
                         end
 
-                        itemRow.text:SetText("  " .. itemText)
-                        itemRow.countText:SetText("x" .. tostring(itemData.count or 0))
-                        itemRow:SetScript("OnClick", nil)
-
-                            itemRow:SetScript("OnEnter", function(self)
-                                self.highlight:Show()
-
-                                if self.itemLink then
-                                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                                    GameTooltip:SetHyperlink(self.itemLink)
-                                    GameTooltip:Show()
-                                end
-                            end)
-
-                        itemRow:SetScript("OnLeave", function(self)
-                            GameTooltip:Hide()
-                            self.highlight:Hide()
-                        end)
-
-                        rowIndex = rowIndex + 1
+                        rowIndex = AddItemRow(
+                            rowIndex,
+                            "      " .. itemText,
+                            itemData.link,
+                            itemData.firstDropLootCount,
+                            "x" .. tostring(itemData.count or 0)
+                        )
                     end
                 end
 
                     local mobGold = data.gold or 0
                     if mobGold > 0 then
-                        local goldRow = GetRow(rowIndex)
-                        goldRow:Show()
-                        goldRow.isMobRow = false
-                        goldRow.mobName = nil
-                        goldRow.text:SetText("    |cffd8b25dTotal gold:|r")
-                        goldRow.countText:SetText(FormatMoney(mobGold))
-                        goldRow:SetScript("OnClick", nil)
-                        goldRow.itemLink = nil
-                        goldRow:SetScript("OnEnter", nil)
-                        goldRow:SetScript("OnLeave", function(self)
-                            self.highlight:Hide()
-                        end)
-                        rowIndex = rowIndex + 1
+                        rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(mobGold))
                     end
 
                     local sessionData = FarmingoSession.mobs[mobKey]
@@ -3811,6 +3432,22 @@ end
     content:SetSize(frame:GetWidth() - 40, totalHeight)
 end
 
+UpdateDisplay = function()
+    EnsureDB()
+
+    local duplicateNameMap = BuildDuplicateMobNameMap()
+    local profileMobs = GetProfileMobs()
+
+    UpdateToggleAllButton(profileMobs)
+    UpdateFooterTotals(profileMobs)
+
+    if currentViewMode == "place" then
+        RenderPlaceView(profileMobs, duplicateNameMap)
+    else
+        RenderMobView(profileMobs, duplicateNameMap)
+    end
+end
+
 -- ============================================================================
 -- 11. Event registration and event handler
 -- ============================================================================
@@ -3887,7 +3524,6 @@ frame:SetScript("OnEvent", function(self, event, ...)
 
         ClearPendingLoot()
         CurrentLootWasAuto = false
-        CurrentLootHadClearedSlot = false
     end
 end)
 
