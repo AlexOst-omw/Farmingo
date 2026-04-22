@@ -1,8 +1,8 @@
-## Interface:120001, 120005
+## Interface: 120005
 ## Title: Farmingo
 ## Notes: Tracks mob loot, gold, and drop history for farming runs
 ## Author: _Alex_Ost_
-## Version: 1.0.4
+## Version: 1.0.5
 ## SavedVariables: FarmingoDB
 ## IconTexture: Interface\Icons\INV_Box_02
 

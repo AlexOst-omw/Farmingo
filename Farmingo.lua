@@ -31,6 +31,9 @@ local FarmingoSession = {
 local PendingLootSlots = {}
 local AttemptedLootSlots = {}
 local RuntimeSeenSources = {}
+local BossChestLootCounted = {}
+local RecentEncounterBoss = nil
+local RecentEncounterTime = 0
 local currentViewMode = "mob"
 local ClearedSourcesThisWindow = {}
 local SourceLootNumberThisWindow = {}
@@ -187,6 +190,9 @@ local function SetCharacterProfile(profileName)
     wipe(SourceLootNumberThisWindow)
     wipe(AttemptedLootSlots)
     wipe(RuntimeSeenSources)
+    RecentEncounterBoss = nil
+    RecentEncounterTime = 0
+    wipe(BossChestLootCounted)
 
     CurrentLootWasAuto = false
 
@@ -499,12 +505,8 @@ local function GetMobKeyFromUnit(unit)
         return nil
     end
 
-    local unitType, npcID
-
-    local ok = pcall(function()
-        local t, _, _, _, _, id = strsplit("-", guid)
-        unitType = t
-        npcID = id
+    local ok, unitType, npcID = pcall(function()
+        return select(1, strsplit("-", guid)), select(6, strsplit("-", guid))
     end)
 
     if not ok then
@@ -523,12 +525,8 @@ local function GetMobKeyFromSourceGUID(sourceGUID)
         return "unknown"
     end
 
-    local unitType, npcID
-
-    local ok = pcall(function()
-        local t, _, _, _, _, id = strsplit("-", sourceGUID)
-        unitType = t
-        npcID = id
+    local ok, unitType, npcID = pcall(function()
+        return select(1, strsplit("-", sourceGUID)), select(6, strsplit("-", sourceGUID))
     end)
 
     if not ok then
@@ -582,10 +580,13 @@ local function RememberMob(unit)
     if UnitIsFriend("player", unit) then return end
     if not UnitCanAttack("player", unit) then return end
 
-    local name = UnitName(unit)
-    local mobKey = GetMobKeyFromUnit(unit)
+    local okName, name = pcall(UnitName, unit)
+    if not okName or not name then
+        return
+    end
 
-    if not name or not mobKey then
+    local mobKey = GetMobKeyFromUnit(unit)
+    if not mobKey then
         return
     end
 
@@ -969,6 +970,44 @@ local function GetCurrentPlaceInfo()
     }
 end
 
+local function CaptureEncounterBoss(encounterID, encounterName)
+    local _, instanceType = GetInstanceInfo()
+    if instanceType ~= "party" and instanceType ~= "raid" then
+        return
+    end
+
+    if not encounterID or not encounterName or encounterName == "" then
+        return
+    end
+
+    RecentEncounterBoss = {
+        mobKey = "Encounter:" .. tostring(encounterID),
+        displayName = encounterName,
+        mapID = C_Map.GetBestMapForUnit("player"),
+    }
+    RecentEncounterTime = GetTime() or 0
+
+    BossChestLootCounted[RecentEncounterBoss.mobKey] = nil
+end
+
+local function GetRecentEncounterBoss()
+    if not RecentEncounterBoss then
+        return nil
+    end
+
+    local now = GetTime() or 0
+    if now - (RecentEncounterTime or 0) > 120 then
+        return nil
+    end
+
+    local currentMapID = C_Map.GetBestMapForUnit("player")
+    if RecentEncounterBoss.mapID and currentMapID and RecentEncounterBoss.mapID ~= currentMapID then
+        return nil
+    end
+
+    return RecentEncounterBoss.mobKey, RecentEncounterBoss.displayName
+end
+
 -- ============================================================================
 -- 7. Loot tracking helpers
 -- ============================================================================
@@ -1042,6 +1081,9 @@ local function ClearPendingLoot()
     ClearedSourcesThisWindow = {}
     SourceLootNumberThisWindow = {}
     wipe(AttemptedLootSlots)
+    wipe(BossChestLootCounted)
+    RecentEncounterBoss = nil
+    RecentEncounterTime = 0
 end
 
 local function ProcessAttemptedPendingLootSlots()
@@ -1081,6 +1123,7 @@ ProcessClearedLootSlot = function(slot)
     local placeInfo = GetCurrentPlaceInfo()
     local placeKey = placeInfo.placeKey
     local sourceToMobName = {}
+    local recentBossMobKey, recentBossDisplayName = GetRecentEncounterBoss()
 
     for i = 1, #sources, 2 do
         local sourceGUID = sources[i]
@@ -1092,7 +1135,7 @@ ProcessClearedLootSlot = function(slot)
         end
     end
 
-    for i = 1, #sources, 2 do
+    for i = 1, math.max(#sources, 1), 2 do
         local sourceGUID = sources[i]
         local sourceQuantity = tonumber(sources[i + 1]) or quantity or 1
 
@@ -1131,9 +1174,27 @@ ProcessClearedLootSlot = function(slot)
                 ClearedSourcesThisWindow[sourceGUID] = true
                 AddPlaceToMob(mobKey, displayName, placeKey)
             end
+
+        elseif (not sourceGUID or not IsMobGUID(sourceGUID)) and recentBossMobKey and recentBossDisplayName then
+            if not BossChestLootCounted[recentBossMobKey] then
+                IncrementLootCount(recentBossMobKey, recentBossDisplayName)
+                IncrementSessionLootCount(recentBossMobKey, recentBossDisplayName)
+                AddPlaceToMob(recentBossMobKey, recentBossDisplayName, placeKey)
+                BossChestLootCounted[recentBossMobKey] = true
+            end
+
+            if slotType == Enum.LootSlotType.Item and lootName then
+                AddLootToMob(recentBossMobKey, recentBossDisplayName, lootName, sourceQuantity, itemLink, nil)
+                AddLootToSession(recentBossMobKey, recentBossDisplayName, lootName, sourceQuantity)
+            elseif slotType == Enum.LootSlotType.Money and lootName then
+                local copper = ParseMoneyTextToCopper(lootName)
+                AddGoldToMob(recentBossMobKey, recentBossDisplayName, copper)
+                AddGoldToSession(recentBossMobKey, recentBossDisplayName, copper)
+            end
+
+            break
         end
     end
-
     PendingLootSlots[slot] = nil
     UpdateDisplay()
 end
@@ -2345,7 +2406,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
 
                         local placeTotalGold = GetPlaceGoldTotal(profileMobs, placeKey)
 
-                        rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(placeTotalGold))
+                        rowIndex = AddInfoRow(rowIndex, "        |cffd8b25dTotal gold:|r", FormatMoney(placeTotalGold))
 
                         local mobList = {}
 
@@ -2423,7 +2484,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
                                 table.sort(itemNames)
 
                                 if #itemNames == 0 then
-                                    rowIndex = AddNoItemsRow(rowIndex, "    |cff888888No items recorded|r")
+                                    rowIndex = AddNoItemsRow(rowIndex, "        |cff888888No items recorded|r")
                                 else
                                     for _, itemName in ipairs(itemNames) do
                                         local itemData = mobData.items[itemName]
@@ -2445,7 +2506,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
 
                                 local mobGold = mobData.gold or 0
                                 if mobGold > 0 then
-                                    rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(mobGold))
+                                    rowIndex = AddInfoRow(rowIndex, "        |cffd8b25dTotal gold:|r", FormatMoney(mobGold))
                                 end
 
                                 local sessionData = FarmingoSession.mobs[mobKey]
@@ -2462,7 +2523,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
                                 sessionRow.isMobRow = false
                                 sessionRow.mobKey = nil
                                 sessionRow.itemLink = nil
-                                sessionRow.text:SetText("    |cff66ccffThis session loots:|r")
+                                sessionRow.text:SetText("        |cff66ccffThis session loots:|r")
                                 sessionRow.countText:SetText("|cff66ccff" .. sessionLootCount .. " loots|r")
                                 sessionRow:SetScript("OnClick", nil)
                                 sessionRow:SetScript("OnEnter", nil)
@@ -2478,7 +2539,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
                                     sessionGoldRow.isMobRow = false
                                     sessionGoldRow.mobKey = nil
                                     sessionGoldRow.itemLink = nil
-                                    sessionGoldRow.text:SetText("    |cff66ccffThis session gold:|r")
+                                    sessionGoldRow.text:SetText("        |cff66ccffThis session gold:|r")
                                     sessionGoldRow.countText:SetText("|cffffffff" .. FormatMoney(sessionGold) .. "|r")
                                     sessionGoldRow:SetScript("OnClick", nil)
                                     sessionGoldRow:SetScript("OnEnter", nil)
@@ -2542,7 +2603,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
 
                     local continentTotalGold = GetGroupedGoldTotal(placeData.zones[worldName][continentName])
 
-                    rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(continentTotalGold))
+                    rowIndex = AddInfoRow(rowIndex, "        |cffd8b25dTotal gold:|r", FormatMoney(continentTotalGold))
 
                     local placeKeys = {}
                     for placeKey in pairs(placeData.zones[worldName][continentName]) do
@@ -2592,7 +2653,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
 
                             local placeTotalGold = GetPlaceGoldTotal(profileMobs, placeKey)
 
-                            rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(placeTotalGold))
+                            rowIndex = AddInfoRow(rowIndex, "            |cffd8b25dTotal gold:|r", FormatMoney(placeTotalGold))
 
                             local mobList = {}
                             for mobKey, mobData in pairs(placeData.zones[worldName][continentName][placeKey]) do
@@ -2669,7 +2730,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
                                     table.sort(itemNames)
 
                                     if #itemNames == 0 then
-                                        rowIndex = AddNoItemsRow(rowIndex, "    |cff888888No items recorded|r")
+                                        rowIndex = AddNoItemsRow(rowIndex, "              |cff888888No items recorded|r")
                                     else
                                         for _, itemName in ipairs(itemNames) do
                                             local itemData = mobData.items[itemName]
@@ -2691,7 +2752,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
 
                                     local mobGold = mobData.gold or 0
                                     if mobGold > 0 then
-                                        rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(mobGold))
+                                        rowIndex = AddInfoRow(rowIndex, "              |cffd8b25dTotal gold:|r", FormatMoney(mobGold))
                                     end
 
                                     local sessionData = FarmingoSession.mobs[mobKey]
@@ -2708,7 +2769,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
                                     sessionRow.isMobRow = false
                                     sessionRow.mobKey = nil
                                     sessionRow.itemLink = nil
-                                    sessionRow.text:SetText("    |cff66ccffThis session loots:|r")
+                                    sessionRow.text:SetText("              |cff66ccffThis session loots:|r")
                                     sessionRow.countText:SetText("|cff66ccff" .. sessionLootCount .. " loots|r")
                                     sessionRow:SetScript("OnClick", nil)
                                     sessionRow:SetScript("OnEnter", nil)
@@ -2724,7 +2785,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
                                         sessionGoldRow.isMobRow = false
                                         sessionGoldRow.mobKey = nil
                                         sessionGoldRow.itemLink = nil
-                                        sessionGoldRow.text:SetText("    |cff66ccffThis session gold:|r")
+                                        sessionGoldRow.text:SetText("              |cff66ccffThis session gold:|r")
                                         sessionGoldRow.countText:SetText("|cffffffff" .. FormatMoney(sessionGold) .. "|r")
                                         sessionGoldRow:SetScript("OnClick", nil)
                                         sessionGoldRow:SetScript("OnEnter", nil)
@@ -2835,7 +2896,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
 
                     local placeTotalGold = GetPlaceGoldTotal(profileMobs, placeKey)
 
-                    rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(placeTotalGold))
+                    rowIndex = AddInfoRow(rowIndex, "        |cffd8b25dTotal gold:|r", FormatMoney(placeTotalGold))
 
                     local mobList = {}
 
@@ -2912,7 +2973,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
                             table.sort(itemNames)
 
                             if #itemNames == 0 then
-                                rowIndex = AddNoItemsRow(rowIndex, "    |cff888888No items recorded|r")
+                                rowIndex = AddNoItemsRow(rowIndex, "          |cff888888No items recorded|r")
                             else
                                 for _, itemName in ipairs(itemNames) do
                                     local itemData = mobData.items[itemName]
@@ -2934,7 +2995,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
 
                             local mobGold = mobData.gold or 0
                             if mobGold > 0 then
-                                rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(mobGold))
+                                rowIndex = AddInfoRow(rowIndex, "          |cffd8b25dTotal gold:|r", FormatMoney(mobGold))
                             end
 
                             local sessionData = FarmingoSession.mobs[mobKey]
@@ -2951,7 +3012,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
                             sessionRow.isMobRow = false
                             sessionRow.mobKey = nil
                             sessionRow.itemLink = nil
-                            sessionRow.text:SetText("    |cff66ccffThis session loots:|r")
+                            sessionRow.text:SetText("          |cff66ccffThis session loots:|r")
                             sessionRow.countText:SetText("|cff66ccff" .. sessionLootCount .. " loots|r")
                             sessionRow:SetScript("OnClick", nil)
                             sessionRow:SetScript("OnEnter", nil)
@@ -2967,7 +3028,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
                                 sessionGoldRow.isMobRow = false
                                 sessionGoldRow.mobKey = nil
                                 sessionGoldRow.itemLink = nil
-                                sessionGoldRow.text:SetText("    |cff66ccffThis session gold:|r")
+                                sessionGoldRow.text:SetText("          |cff66ccffThis session gold:|r")
                                 sessionGoldRow.countText:SetText("|cffffffff" .. FormatMoney(sessionGold) .. "|r")
                                 sessionGoldRow:SetScript("OnClick", nil)
                                 sessionGoldRow:SetScript("OnEnter", nil)
@@ -3076,7 +3137,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
 
                     local placeTotalGold = GetPlaceGoldTotal(profileMobs, placeKey)
 
-                    rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(placeTotalGold))
+                    rowIndex = AddInfoRow(rowIndex, "        |cffd8b25dTotal gold:|r", FormatMoney(placeTotalGold))
 
                     local mobList = {}
 
@@ -3153,7 +3214,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
                             table.sort(itemNames)
 
                             if #itemNames == 0 then
-                                rowIndex = AddNoItemsRow(rowIndex, "    |cff888888No items recorded|r")
+                                rowIndex = AddNoItemsRow(rowIndex, "        |cff888888No items recorded|r")
                             else
                                 for _, itemName in ipairs(itemNames) do
                                     local itemData = mobData.items[itemName]
@@ -3175,7 +3236,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
 
                             local mobGold = mobData.gold or 0
                             if mobGold > 0 then
-                                rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", FormatMoney(mobGold))
+                                rowIndex = AddInfoRow(rowIndex, "          |cffd8b25dTotal gold:|r", FormatMoney(mobGold))
                             end
 
                             local sessionData = FarmingoSession.mobs[mobKey]
@@ -3192,7 +3253,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
                             sessionRow.isMobRow = false
                             sessionRow.mobKey = nil
                             sessionRow.itemLink = nil
-                            sessionRow.text:SetText("    |cff66ccffThis session loots:|r")
+                            sessionRow.text:SetText("          |cff66ccffThis session loots:|r")
                             sessionRow.countText:SetText("|cff66ccff" .. sessionLootCount .. " loots|r")
                             sessionRow:SetScript("OnClick", nil)
                             sessionRow:SetScript("OnEnter", nil)
@@ -3208,7 +3269,7 @@ RenderPlaceView = function(profileMobs, duplicateNameMap)
                                 sessionGoldRow.isMobRow = false
                                 sessionGoldRow.mobKey = nil
                                 sessionGoldRow.itemLink = nil
-                                sessionGoldRow.text:SetText("    |cff66ccffThis session gold:|r")
+                                sessionGoldRow.text:SetText("          |cff66ccffThis session gold:|r")
                                 sessionGoldRow.countText:SetText("|cffffffff" .. FormatMoney(sessionGold) .. "|r")
                                 sessionGoldRow:SetScript("OnClick", nil)
                                 sessionGoldRow:SetScript("OnEnter", nil)
@@ -3459,6 +3520,7 @@ frame:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
 frame:RegisterEvent("LOOT_OPENED")
 frame:RegisterEvent("LOOT_SLOT_CLEARED")
 frame:RegisterEvent("LOOT_CLOSED")
+frame:RegisterEvent("ENCOUNTER_START")
 
 frame:SetScript("OnDragStart", function(self)
     EnsureDB()
@@ -3514,6 +3576,10 @@ frame:SetScript("OnEvent", function(self, event, ...)
     elseif event == "LOOT_SLOT_CLEARED" then
         local slot = ...
         ProcessClearedLootSlot(slot)
+
+    elseif event == "ENCOUNTER_START" then
+        local encounterID, encounterName = ...
+        CaptureEncounterBoss(encounterID, encounterName)
 
     elseif event == "LOOT_CLOSED" then
         if next(AttemptedLootSlots) then
