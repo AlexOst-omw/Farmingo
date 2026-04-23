@@ -38,6 +38,8 @@ local currentViewMode = "mob"
 local ClearedSourcesThisWindow = {}
 local SourceLootNumberThisWindow = {}
 local CurrentLootWasAuto = false
+local LootHadInventoryFullError = false
+local PendingClosedLootWindows = {}
 local isSearchOpen = false
 local searchQuery = ""
 local SEARCH_PLACEHOLDER = "Search info..."
@@ -56,6 +58,7 @@ local EnsureDB
 local RefreshSettingsUI
 local RefreshFooterLayout
 local ProcessClearedLootSlot
+local ProcessClearedLootSlotFromWindow
 local UpdateToggleAllButton
 local UpdateFooterTotals
 local RenderPlaceView
@@ -190,6 +193,8 @@ local function SetCharacterProfile(profileName)
     wipe(SourceLootNumberThisWindow)
     wipe(AttemptedLootSlots)
     wipe(RuntimeSeenSources)
+    wipe(PendingClosedLootWindows)
+    LootHadInventoryFullError = false
     RecentEncounterBoss = nil
     RecentEncounterTime = 0
     wipe(BossChestLootCounted)
@@ -264,8 +269,6 @@ end
 
 function EnsureDB()
     FarmingoDB = FarmingoDB or {}
-
-    FarmingoDB.debugPlaces = FarmingoDB.debugPlaces or {}
 
     FarmingoDB.ui = FarmingoDB.ui or {}
     if FarmingoDB.ui.locked == nil then
@@ -942,23 +945,7 @@ local function GetCurrentPlaceInfo()
     end
 
     local placeKey = worldName .. "|" .. continentName .. "|" .. placeType .. "|" .. placeName
-    -- debug
-    local debugEntry = {
-        zoneName = zoneName,
-        autoZoneName = autoZoneName,
-        worldName = worldName,
-        continentName = continentName,
-        placeType = placeType,
-        placeName = placeName,
-        mapID = mapID,
-    }
 
-    local key = (placeName or "Unknown") .. "|" .. tostring(mapID)
-
-    if worldName == "Cosmic" then
-    FarmingoDB.debugPlaces[key] = debugEntry
-    end
-    -- debug
     return {
         worldName = worldName,
         continentName = continentName,
@@ -1050,6 +1037,99 @@ local function ParseMoneyTextToCopper(text)
     return total
 end
 
+local function CopyKeyTable(source)
+    local copy = {}
+
+    if not source then
+        return copy
+    end
+
+    for key, value in pairs(source) do
+        copy[key] = value
+    end
+
+    return copy
+end
+
+local function CopyArrayTable(source)
+    local copy = {}
+
+    if not source then
+        return copy
+    end
+
+    for i = 1, #source do
+        copy[i] = source[i]
+    end
+
+    return copy
+end
+
+local function CopyPendingLootSlots(source)
+    local copy = {}
+
+    if not source then
+        return copy
+    end
+
+    for slot, slotData in pairs(source) do
+        copy[slot] = {
+            slotType = slotData.slotType,
+            lootName = slotData.lootName,
+            lootQuantity = slotData.lootQuantity,
+            itemLink = slotData.itemLink,
+            sources = CopyArrayTable(slotData.sources),
+        }
+    end
+
+    return copy
+end
+
+local function CreateRecentEncounterSnapshot()
+    if not RecentEncounterBoss then
+        return nil
+    end
+
+    return {
+        mobKey = RecentEncounterBoss.mobKey,
+        displayName = RecentEncounterBoss.displayName,
+        mapID = RecentEncounterBoss.mapID,
+    }
+end
+
+local function CreateClosedLootWindowSnapshot()
+    return {
+        pendingLootSlots = CopyPendingLootSlots(PendingLootSlots),
+        attemptedLootSlots = CopyKeyTable(AttemptedLootSlots),
+        clearedSourcesThisWindow = CopyKeyTable(ClearedSourcesThisWindow),
+        sourceLootNumberThisWindow = CopyKeyTable(SourceLootNumberThisWindow),
+        bossChestLootCounted = CopyKeyTable(BossChestLootCounted),
+        recentEncounterBoss = CreateRecentEncounterSnapshot(),
+        recentEncounterTime = RecentEncounterTime,
+        wasAuto = CurrentLootWasAuto,
+        hadInventoryFullError = LootHadInventoryFullError,
+    }
+end
+
+local function GetRecentEncounterBossFromWindow(lootWindow)
+    local boss = lootWindow.recentEncounterBoss
+    if not boss then
+        return nil
+    end
+
+    local now = GetTime() or 0
+    if now - (lootWindow.recentEncounterTime or 0) > 120 then
+        return nil
+    end
+
+    local currentMapID = C_Map.GetBestMapForUnit("player")
+    if boss.mapID and currentMapID and boss.mapID ~= currentMapID then
+        return nil
+    end
+
+    return boss.mobKey, boss.displayName
+end
+
 local function BuildPendingLoot()
 
     wipe(AttemptedLootSlots)
@@ -1086,17 +1166,31 @@ local function ClearPendingLoot()
     RecentEncounterTime = 0
 end
 
-local function ProcessAttemptedPendingLootSlots()
-    for slot in pairs(AttemptedLootSlots) do
-        if PendingLootSlots[slot] then
-            ProcessClearedLootSlot(slot)
+local function ProcessAttemptedPendingLootSlotsFromWindow(lootWindow)
+    for slot in pairs(lootWindow.attemptedLootSlots) do
+        local slotData = lootWindow.pendingLootSlots[slot]
+
+        if slotData then
+            if not (lootWindow.hadInventoryFullError and slotData.slotType == Enum.LootSlotType.Item) then
+                ProcessClearedLootSlotFromWindow(lootWindow, slot)
+            end
         end
     end
 end
 
-local function ProcessAllPendingLootSlots()
-    for slot in pairs(PendingLootSlots) do
-        ProcessClearedLootSlot(slot)
+local function ProcessAllPendingLootSlotsFromWindow(lootWindow)
+    for slot, slotData in pairs(lootWindow.pendingLootSlots) do
+        if not (lootWindow.hadInventoryFullError and slotData.slotType == Enum.LootSlotType.Item) then
+            ProcessClearedLootSlotFromWindow(lootWindow, slot)
+        end
+    end
+end
+
+local function HandleClosedLootWindow(lootWindow)
+    if next(lootWindow.attemptedLootSlots) then
+        ProcessAttemptedPendingLootSlotsFromWindow(lootWindow)
+    elseif lootWindow.wasAuto and next(lootWindow.pendingLootSlots) then
+        ProcessAllPendingLootSlotsFromWindow(lootWindow)
     end
 end
 
@@ -1106,10 +1200,10 @@ hooksecurefunc("LootSlot", function(slot)
     end
 end)
 
-ProcessClearedLootSlot = function(slot)
+ProcessClearedLootSlotFromWindow = function(lootWindow, slot)
     EnsureDB()
 
-    local slotData = PendingLootSlots[slot]
+    local slotData = lootWindow.pendingLootSlots[slot]
     if not slotData then
         return
     end
@@ -1123,7 +1217,7 @@ ProcessClearedLootSlot = function(slot)
     local placeInfo = GetCurrentPlaceInfo()
     local placeKey = placeInfo.placeKey
     local sourceToMobName = {}
-    local recentBossMobKey, recentBossDisplayName = GetRecentEncounterBoss()
+    local recentBossMobKey, recentBossDisplayName = GetRecentEncounterBossFromWindow(lootWindow)
 
     for i = 1, #sources, 2 do
         local sourceGUID = sources[i]
@@ -1146,17 +1240,17 @@ ProcessClearedLootSlot = function(slot)
 
             local entry = EnsureMobEntry(mobKey, displayName)
 
-            if not SourceLootNumberThisWindow[sourceGUID] then
+            if not lootWindow.sourceLootNumberThisWindow[sourceGUID] then
                 local lootNumber = entry.lootCount or 0
 
                 if not HasSeenSource(sourceGUID) then
                     lootNumber = lootNumber + 1
                 end
 
-                SourceLootNumberThisWindow[sourceGUID] = lootNumber
+                lootWindow.sourceLootNumberThisWindow[sourceGUID] = lootNumber
             end
 
-            local firstDropLootCount = SourceLootNumberThisWindow[sourceGUID]
+            local firstDropLootCount = lootWindow.sourceLootNumberThisWindow[sourceGUID]
 
             if slotType == Enum.LootSlotType.Item and lootName then
                 AddLootToMob(mobKey, displayName, lootName, sourceQuantity, itemLink, firstDropLootCount)
@@ -1167,20 +1261,20 @@ ProcessClearedLootSlot = function(slot)
                 AddGoldToSession(mobKey, displayName, copper)
             end
 
-            if not ClearedSourcesThisWindow[sourceGUID] and not HasSeenSource(sourceGUID) then
+            if not lootWindow.clearedSourcesThisWindow[sourceGUID] and not HasSeenSource(sourceGUID) then
                 IncrementLootCount(mobKey, displayName)
                 IncrementSessionLootCount(mobKey, displayName)
                 MarkSourceSeen(sourceGUID)
-                ClearedSourcesThisWindow[sourceGUID] = true
+                lootWindow.clearedSourcesThisWindow[sourceGUID] = true
                 AddPlaceToMob(mobKey, displayName, placeKey)
             end
 
         elseif (not sourceGUID or not IsMobGUID(sourceGUID)) and recentBossMobKey and recentBossDisplayName then
-            if not BossChestLootCounted[recentBossMobKey] then
+            if not lootWindow.bossChestLootCounted[recentBossMobKey] then
                 IncrementLootCount(recentBossMobKey, recentBossDisplayName)
                 IncrementSessionLootCount(recentBossMobKey, recentBossDisplayName)
                 AddPlaceToMob(recentBossMobKey, recentBossDisplayName, placeKey)
-                BossChestLootCounted[recentBossMobKey] = true
+                lootWindow.bossChestLootCounted[recentBossMobKey] = true
             end
 
             if slotType == Enum.LootSlotType.Item and lootName then
@@ -1195,8 +1289,20 @@ ProcessClearedLootSlot = function(slot)
             break
         end
     end
-    PendingLootSlots[slot] = nil
+
+    lootWindow.pendingLootSlots[slot] = nil
     UpdateDisplay()
+end
+
+ProcessClearedLootSlot = function(slot)
+    ProcessClearedLootSlotFromWindow({
+        pendingLootSlots = PendingLootSlots,
+        clearedSourcesThisWindow = ClearedSourcesThisWindow,
+        sourceLootNumberThisWindow = SourceLootNumberThisWindow,
+        bossChestLootCounted = BossChestLootCounted,
+        recentEncounterBoss = RecentEncounterBoss,
+        recentEncounterTime = RecentEncounterTime,
+    }, slot)
 end
 
 -- ============================================================================
@@ -1750,7 +1856,7 @@ commandsLeft:SetJustifyV("TOP")
 commandsLeft:SetText(
     "|cffbfbfbf/ft show|r - show window\n" ..
     "|cffbfbfbf/ft hide|r - hide window\n" ..
-    "|cffbfbfbf/ft reset|r - request data reset\n" ..
+    "|cffbfbfbf/ft reset|r - request FULL data reset\n" ..
     "|cffbfbfbf/ft confirmreset|r - confirm data reset\n" ..
     "|cffbfbfbf/ft profile|r - show current profile"
 )
@@ -3520,6 +3626,7 @@ frame:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
 frame:RegisterEvent("LOOT_OPENED")
 frame:RegisterEvent("LOOT_SLOT_CLEARED")
 frame:RegisterEvent("LOOT_CLOSED")
+frame:RegisterEvent("UI_ERROR_MESSAGE")
 frame:RegisterEvent("ENCOUNTER_START")
 
 frame:SetScript("OnDragStart", function(self)
@@ -3571,6 +3678,7 @@ frame:SetScript("OnEvent", function(self, event, ...)
     elseif event == "LOOT_OPENED" then
         local autoLoot = ...
         CurrentLootWasAuto = autoLoot and true or false
+        LootHadInventoryFullError = false
         BuildPendingLoot()
 
     elseif event == "LOOT_SLOT_CLEARED" then
@@ -3581,15 +3689,35 @@ frame:SetScript("OnEvent", function(self, event, ...)
         local encounterID, encounterName = ...
         CaptureEncounterBoss(encounterID, encounterName)
 
-    elseif event == "LOOT_CLOSED" then
-        if next(AttemptedLootSlots) then
-            ProcessAttemptedPendingLootSlots()
-        elseif CurrentLootWasAuto and next(PendingLootSlots) then
-            ProcessAllPendingLootSlots()
+    elseif event == "UI_ERROR_MESSAGE" then
+        local arg1, arg2 = ...
+
+        if arg1 == ERR_INV_FULL or arg2 == ERR_INV_FULL then
+            LootHadInventoryFullError = true
+
+            if #PendingClosedLootWindows > 0 then
+                PendingClosedLootWindows[#PendingClosedLootWindows].hadInventoryFullError = true
+            end
         end
+
+    elseif event == "LOOT_CLOSED" then
+        local closedLootWindow = CreateClosedLootWindowSnapshot()
+        table.insert(PendingClosedLootWindows, closedLootWindow)
 
         ClearPendingLoot()
         CurrentLootWasAuto = false
+        LootHadInventoryFullError = false
+
+        C_Timer.After(0.10, function()
+            HandleClosedLootWindow(closedLootWindow)
+
+            for i = #PendingClosedLootWindows, 1, -1 do
+                if PendingClosedLootWindows[i] == closedLootWindow then
+                    table.remove(PendingClosedLootWindows, i)
+                    break
+                end
+            end
+        end)
     end
 end)
 
@@ -3619,24 +3747,6 @@ end)
 -- ============================================================================
 
 SLASH_FARMINGO1 = "/ft"
-
-SLASH_FARMDEBUG1 = "/farmdebug"
-SlashCmdList["FARMDEBUG"] = function()
-    EnsureDB()
-
-    print("---- Farmingo Debug Places ----")
-
-    for key, data in pairs(FarmingoDB.debugPlaces or {}) do
-        print(
-            key,
-            "| Zone:", data.zoneName,
-            "| Auto:", data.autoZoneName,
-            "| World:", data.worldName,
-            "| Continent:", data.continentName,
-            "| Type:", data.placeType
-        )
-    end
-end
 
 SlashCmdList["FARMINGO"] = function(msg)
     msg = msg or ""
@@ -3703,7 +3813,7 @@ SlashCmdList["FARMINGO"] = function(msg)
         print("Farmingo: hidden.")
     elseif lowerMsg == "reset" then
         pendingReset = true
-        print("Farmingo: type /ft confirmreset to delete ALL saved data. OR /ft show to cancel")
+        print("Farmingo: type /ft confirmreset to delete ALL profiles and ALL data permanently. OR /ft show to cancel")
 
     elseif lowerMsg == "confirmreset" then
         if pendingReset then
@@ -3716,7 +3826,6 @@ SlashCmdList["FARMINGO"] = function(msg)
                     },
                 },
                 characterProfile = {},
-                debugPlaces = {},
                 ui = {
                     locked = oldUI.locked or false,
                     settingsOpen = oldUI.settingsOpen or false,
