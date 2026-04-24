@@ -634,7 +634,8 @@ ProcessClearedLootSlotFromWindow = function(lootWindow, slot)
                 AddLootToMob(mobKey, displayName, lootName, sourceQuantity, itemLink, firstDropLootCount)
                 AddLootToSession(mobKey, displayName, lootName, sourceQuantity)
             elseif slotType == Enum.LootSlotType.Money and lootName then
-                local copper = ParseMoneyTextToCopper(lootName)
+                local copper = tonumber(sources[i + 1]) or ParseMoneyTextToCopper(lootName)
+
                 AddGoldToMob(mobKey, displayName, copper)
                 AddGoldToSession(mobKey, displayName, copper)
             end
