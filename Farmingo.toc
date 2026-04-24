@@ -11,4 +11,13 @@ Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
 Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
 Libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
 
-Farmingo.lua
+Core.lua
+DB.lua
+Places.lua
+Loot.lua
+UI_Main.lua
+UI_Render.lua
+UI_Settings.lua
+Tooltip.lua
+Minimap.lua
+Commands.lua
