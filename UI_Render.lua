@@ -23,78 +23,6 @@ local COLOR_PLACE = "|cffffff99"
 local COLOR_MOB = "|cffffff00"
 local COLOR_RESET = "|r"
 
-local function GetPlaceLootTotal(profileMobs, placeKey)
-    local total = 0
-
-    for _, data in pairs(profileMobs) do
-        if data.places and data.places[placeKey] then
-            total = total + data.places[placeKey]
-        end
-    end
-
-    return total
-end
-
-local function GetPlaceGoldTotal(profileMobs, placeKey)
-    local total = 0
-
-    for _, data in pairs(profileMobs) do
-        if data.places and data.places[placeKey] then
-            total = total + (data.gold or 0)
-        end
-    end
-
-    return total
-end
-
-local function GetGroupedLootTotal(groupedPlaces)
-    local total = 0
-
-    for placeKey, mobs in pairs(groupedPlaces) do
-        for _, mobData in pairs(mobs) do
-            if mobData.places and mobData.places[placeKey] then
-                total = total + mobData.places[placeKey]
-            end
-        end
-    end
-
-    return total
-end
-
-local function GetGroupedGoldTotal(groupedPlaces)
-    local total = 0
-
-    for placeKey, mobs in pairs(groupedPlaces) do
-        for _, mobData in pairs(mobs) do
-            if mobData.places and mobData.places[placeKey] then
-                total = total + (mobData.gold or 0)
-            end
-        end
-    end
-
-    return total
-end
-
-local function GetNestedGroupedLootTotal(nestedGroups)
-    local total = 0
-
-    for _, groupedPlaces in pairs(nestedGroups) do
-        total = total + GetGroupedLootTotal(groupedPlaces)
-    end
-
-    return total
-end
-
-local function GetNestedGroupedGoldTotal(nestedGroups)
-    local total = 0
-
-    for _, groupedPlaces in pairs(nestedGroups) do
-        total = total + GetGroupedGoldTotal(groupedPlaces)
-    end
-
-    return total
-end
-
 local function GetPlaceNameFromKey(placeKey)
     local _, _, _, placeName = strsplit("|", placeKey)
     return placeName or placeKey
@@ -314,9 +242,30 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
         raids = {},
     }
 
+    local placeLootTotals = {}
+    local placeGoldTotals = {}
+
+    local worldLootTotals = {}
+    local worldGoldTotals = {}
+
+    local continentLootTotals = {}
+    local continentGoldTotals = {}
+
+    local dungeonLootTotal = 0
+    local dungeonGoldTotal = 0
+
+    local raidLootTotal = 0
+    local raidGoldTotal = 0
+
     for mobKey, data in pairs(profileMobs) do
         if Loot.MobMatchesSearch(mobKey, data) then
-            for placeKey in pairs(data.places or {}) do
+            for placeKey, placeLootCount in pairs(data.places or {}) do
+                local lootCount = placeLootCount or 0
+                local goldCount = data.gold or 0
+
+                placeLootTotals[placeKey] = (placeLootTotals[placeKey] or 0) + lootCount
+                placeGoldTotals[placeKey] = (placeGoldTotals[placeKey] or 0) + goldCount
+
                 local worldName, continentName, placeType, placeName = strsplit("|", placeKey)
 
                 if placeType == "zone" then
@@ -340,6 +289,23 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
                     placeData.raids[placeKey] = placeData.raids[placeKey] or {}
                     placeData.raids[placeKey][mobKey] = data
                 end
+
+                if placeType == "zone" then
+                    worldLootTotals[worldName] = (worldLootTotals[worldName] or 0) + lootCount
+                    worldGoldTotals[worldName] = (worldGoldTotals[worldName] or 0) + goldCount
+
+                    local continentKey = worldName .. "|" .. continentName
+                    continentLootTotals[continentKey] = (continentLootTotals[continentKey] or 0) + lootCount
+                    continentGoldTotals[continentKey] = (continentGoldTotals[continentKey] or 0) + goldCount
+
+                elseif placeType == "dungeon" then
+                    dungeonLootTotal = dungeonLootTotal + lootCount
+                    dungeonGoldTotal = dungeonGoldTotal + goldCount
+
+                elseif placeType == "raid" then
+                    raidLootTotal = raidLootTotal + lootCount
+                    raidGoldTotal = raidGoldTotal + goldCount
+                end
             end
         end
     end
@@ -352,7 +318,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
     SortKeysByLootTotal(
         worldKeys,
         function(worldName)
-            return GetNestedGroupedLootTotal(placeData.zones[worldName])
+            return worldLootTotals[worldName] or 0
         end,
         function(worldName)
             return worldName
@@ -364,7 +330,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
     for _, worldName in ipairs(worldKeys) do
         local expandedWorld = FarmingoDB.ui.expandedWorlds[worldName]
 
-        local worldTotalLoots = GetNestedGroupedLootTotal(placeData.zones[worldName])
+        local worldTotalLoots = worldLootTotals[worldName] or 0
 
         local worldRow = GetRow(rowIndex)
         worldRow:Show()
@@ -391,7 +357,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
         rowIndex = rowIndex + 1
 
         if expandedWorld then
-            local worldTotalGold = GetNestedGroupedGoldTotal(placeData.zones[worldName])
+            local worldTotalGold = worldGoldTotals[worldName] or 0
 
             rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", Loot.FormatMoney(worldTotalGold))
 
@@ -404,7 +370,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
                 SortKeysByLootTotal(
                     placeKeys,
                     function(placeKey)
-                        return GetPlaceLootTotal(profileMobs, placeKey)
+                        return placeLootTotals[placeKey] or 0
                     end,
                     function(placeKey)
                         return GetPlaceNameFromKey(placeKey)
@@ -415,7 +381,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
                     local _, _, placeType, placeName = strsplit("|", placeKey)
                     local expandedPlace = FarmingoDB.ui.expandedPlaces[placeKey]
 
-                    local placeTotalLoots = GetPlaceLootTotal(profileMobs, placeKey)
+                    local placeTotalLoots = placeLootTotals[placeKey] or 0
 
                     local placeRow = GetRow(rowIndex)
                     placeRow:Show()
@@ -442,7 +408,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
 
                     if expandedPlace then
 
-                        local placeTotalGold = GetPlaceGoldTotal(profileMobs, placeKey)
+                        local placeTotalGold = placeGoldTotals[placeKey] or 0
 
                         rowIndex = AddInfoRow(rowIndex, "        |cffd8b25dTotal gold:|r", Loot.FormatMoney(placeTotalGold))
 
@@ -602,7 +568,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
             SortKeysByLootTotal(
                 continentKeys,
                 function(continentName)
-                    return GetGroupedLootTotal(placeData.zones[worldName][continentName])
+                    return continentLootTotals[worldName .. "|" .. continentName] or 0
                 end,
                 function(continentName)
                     return continentName
@@ -612,7 +578,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
             for _, continentName in ipairs(continentKeys) do
                 local expandedContinent = FarmingoDB.ui.expandedContinents[continentName]
 
-                local continentTotalLoots = GetGroupedLootTotal(placeData.zones[worldName][continentName])
+                local continentTotalLoots = continentLootTotals[worldName .. "|" .. continentName] or 0
 
                 local continentRow = GetRow(rowIndex)
                 continentRow:Show()
@@ -639,7 +605,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
 
                 if expandedContinent then
 
-                    local continentTotalGold = GetGroupedGoldTotal(placeData.zones[worldName][continentName])
+                    local continentTotalGold = continentGoldTotals[worldName .. "|" .. continentName] or 0
 
                     rowIndex = AddInfoRow(rowIndex, "        |cffd8b25dTotal gold:|r", Loot.FormatMoney(continentTotalGold))
 
@@ -651,7 +617,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
                     SortKeysByLootTotal(
                         placeKeys,
                         function(placeKey)
-                            return GetPlaceLootTotal(profileMobs, placeKey)
+                            return placeLootTotals[placeKey] or 0
                         end,
                         function(placeKey)
                             return GetPlaceNameFromKey(placeKey)
@@ -662,7 +628,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
                         local _, _, placeType, placeName = strsplit("|", placeKey)
                         local expandedPlace = FarmingoDB.ui.expandedPlaces[placeKey]
 
-                        local placeTotalLoots = GetPlaceLootTotal(profileMobs, placeKey)
+                        local placeTotalLoots = placeLootTotals[placeKey] or 0
 
                         local placeRow = GetRow(rowIndex)
                         placeRow:Show()
@@ -689,7 +655,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
 
                         if expandedPlace then
 
-                            local placeTotalGold = GetPlaceGoldTotal(profileMobs, placeKey)
+                            local placeTotalGold = placeGoldTotals[placeKey] or 0
 
                             rowIndex = AddInfoRow(rowIndex, "            |cffd8b25dTotal gold:|r", Loot.FormatMoney(placeTotalGold))
 
@@ -850,9 +816,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
     SortKeysByLootTotal(
         dungeonKeys,
         function(placeKey)
-            return GetGroupedLootTotal({
-                [placeKey] = placeData.dungeons[placeKey]
-            })
+            return placeLootTotals[placeKey] or 0
         end,
         function(placeKey)
             return GetPlaceNameFromKey(placeKey)
@@ -862,12 +826,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
     if #dungeonKeys > 0 then
         local expandedDungeons = FarmingoDB.ui.expandedWorlds["Dungeons"]
 
-        local dungeonsTotalLoots = 0
-        for _, placeKey in ipairs(dungeonKeys) do
-            dungeonsTotalLoots = dungeonsTotalLoots + GetGroupedLootTotal({
-                [placeKey] = placeData.dungeons[placeKey]
-            })
-        end
+        local dungeonsTotalLoots = dungeonLootTotal
 
         local dungeonsRow = GetRow(rowIndex)
         dungeonsRow:Show()
@@ -893,12 +852,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
 
         if expandedDungeons then
 
-            local dungeonsTotalGold = 0
-            for _, placeKey in ipairs(dungeonKeys) do
-                dungeonsTotalGold = dungeonsTotalGold + GetGroupedGoldTotal({
-                    [placeKey] = placeData.dungeons[placeKey]
-                })
-            end
+            local dungeonsTotalGold = dungeonGoldTotal
 
             rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", Loot.FormatMoney(dungeonsTotalGold))
 
@@ -906,7 +860,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
                 local _, _, _, placeName = strsplit("|", placeKey)
                 local expandedPlace = FarmingoDB.ui.expandedPlaces[placeKey]
 
-                local placeTotalLoots = GetPlaceLootTotal(profileMobs, placeKey)
+                local placeTotalLoots = placeLootTotals[placeKey] or 0
 
                 local placeRow = GetRow(rowIndex)
                 placeRow:Show()
@@ -932,7 +886,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
 
                 if expandedPlace then
 
-                    local placeTotalGold = GetPlaceGoldTotal(profileMobs, placeKey)
+                    local placeTotalGold = placeGoldTotals[placeKey] or 0
 
                     rowIndex = AddInfoRow(rowIndex, "        |cffd8b25dTotal gold:|r", Loot.FormatMoney(placeTotalGold))
 
@@ -1091,9 +1045,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
     SortKeysByLootTotal(
         raidKeys,
         function(placeKey)
-            return GetGroupedLootTotal({
-                [placeKey] = placeData.raids[placeKey]
-            })
+            return placeLootTotals[placeKey] or 0
         end,
         function(placeKey)
             return GetPlaceNameFromKey(placeKey)
@@ -1103,12 +1055,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
     if #raidKeys > 0 then
         local expandedRaids = FarmingoDB.ui.expandedWorlds["Raids"]
 
-        local raidsTotalLoots = 0
-        for _, placeKey in ipairs(raidKeys) do
-            raidsTotalLoots = raidsTotalLoots + GetGroupedLootTotal({
-                [placeKey] = placeData.raids[placeKey]
-            })
-        end
+        local raidsTotalLoots = raidLootTotal
 
         local raidsRow = GetRow(rowIndex)
         raidsRow:Show()
@@ -1134,12 +1081,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
 
         if expandedRaids then
 
-            local raidsTotalGold = 0
-            for _, placeKey in ipairs(raidKeys) do
-                raidsTotalGold = raidsTotalGold + GetGroupedGoldTotal({
-                    [placeKey] = placeData.raids[placeKey]
-                })
-            end
+            local raidsTotalGold = raidGoldTotal
 
             rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", Loot.FormatMoney(raidsTotalGold))
 
@@ -1147,7 +1089,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
                 local _, _, _, placeName = strsplit("|", placeKey)
                 local expandedPlace = FarmingoDB.ui.expandedPlaces[placeKey]
 
-                local placeTotalLoots = GetPlaceLootTotal(profileMobs, placeKey)
+                local placeTotalLoots = placeLootTotals[placeKey] or 0
 
                 local placeRow = GetRow(rowIndex)
                 placeRow:Show()
@@ -1173,7 +1115,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
 
                 if expandedPlace then
 
-                    local placeTotalGold = GetPlaceGoldTotal(profileMobs, placeKey)
+                    local placeTotalGold = placeGoldTotals[placeKey] or 0
 
                     rowIndex = AddInfoRow(rowIndex, "        |cffd8b25dTotal gold:|r", Loot.FormatMoney(placeTotalGold))
 
