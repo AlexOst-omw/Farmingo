@@ -99,6 +99,17 @@ SlashCmdList["FARMINGO"] = function(msg)
         Print("hidden.")
         return
 
+    elseif lower == "resetprofile" then
+        ns.DB.ResetActiveProfileData()
+
+        print("|cff00ff00Farmingo:|r Current profile data reset.")
+
+        if ns.UI and ns.UI.UpdateDisplay then
+            ns.UI.UpdateDisplay()
+        end
+
+        return
+
     elseif lower == "reset" then
         pendingReset = true
         Print("type /ft confirmreset to delete ALL data. OR /ft show to cancel")
@@ -148,6 +159,7 @@ SlashCmdList["FARMINGO"] = function(msg)
     print("Farmingo commands:")
     print("/ft show - show window")
     print("/ft hide - hide window")
+    print("/ft resetprofile - reset current profile data only")
     print("/ft reset - request full reset")
     print("/ft confirmreset - confirm reset")
     print("/ft profile - current profile")

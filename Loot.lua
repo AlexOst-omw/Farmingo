@@ -313,6 +313,12 @@ local function GetSafeDisplayName(mobKey, preferredName)
     end
 
     local npcID = GetMobIDFromKey(mobKey)
+
+    local manualName = npcID and ns.NPCNames and ns.NPCNames[tonumber(npcID)]
+    if manualName then
+        return manualName
+    end
+
     if npcID then
         local ok, creatureName = pcall(function()
             if C_CreatureInfo and C_CreatureInfo.GetCreatureName then

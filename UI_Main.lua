@@ -292,30 +292,22 @@ commandsTitle:SetText("|cff888888Commands|r")
 
 local commandsLeft = settingsContent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 commandsLeft:SetPoint("TOPLEFT", commandsTitle, "BOTTOMLEFT", 0, -6)
-commandsLeft:SetWidth(122)
+commandsLeft:SetWidth(260)
 commandsLeft:SetJustifyH("LEFT")
 commandsLeft:SetJustifyV("TOP")
 commandsLeft:SetText(
     "|cffbfbfbf/ft show|r - show window\n" ..
-    "|cffbfbfbf/ft hide|r - hide window\n" ..
-    "|cffbfbfbf/ft reset|r - request FULL data reset\n" ..
-    "|cffbfbfbf/ft confirmreset|r - confirm data reset\n" ..
-    "|cffbfbfbf/ft profile|r - show current profile"
-)
+    "|cffbfbfbf/ft hide|r - hide window\n\n" ..
 
-local commandsRight = settingsContent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-commandsRight:SetPoint("TOPLEFT", commandsLeft, "TOPRIGHT", 10, 0)
-commandsRight:SetWidth(122)
-commandsRight:SetJustifyH("LEFT")
-commandsRight:SetJustifyV("TOP")
-commandsRight:SetText(
-    "|cffbfbfbf/ft profiles|r - list all\n" ..
-    "|cffbfbfbf/ft profile create NAME|r\n" ..
-    "  create\n" ..
-    "|cffbfbfbf/ft profile use NAME|r\n" ..
-    "  switch\n" ..
-    "|cffbfbfbf/ft profile delete NAME|r\n" ..
-    "  delete unused"
+    "|cffbfbfbf/ft resetprofile|r - reset current profile data\n" ..
+    "|cffbfbfbf/ft reset|r - request FULL data reset\n" ..
+    "|cffbfbfbf/ft confirmreset|r - confirm FULL reset\n\n" ..
+
+    "|cffbfbfbf/ft profile|r - show current profile\n" ..
+    "|cffbfbfbf/ft profiles|r - list all profiles\n" ..
+    "|cffbfbfbf/ft profile create NAME|r - create profile\n" ..
+    "|cffbfbfbf/ft profile use NAME|r - switch profile\n" ..
+    "|cffbfbfbf/ft profile delete NAME|r - delete profile"
 )
 
 local toggleAllButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")

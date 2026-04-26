@@ -295,6 +295,35 @@ local function SetCharacterProfile(profileName)
     return true
 end
 
+local function ResetActiveProfileData()
+    EnsureDB()
+
+    local profile = GetActiveProfile()
+    profile.mobs = {}
+    profile.mobNamesByKey = {}
+
+    wipe(State.observedMobNamesByKey)
+    wipe(State.pendingLootSlots)
+    wipe(State.clearedSourcesThisWindow)
+    wipe(State.sourceLootNumberThisWindow)
+    wipe(State.attemptedLootSlots)
+    wipe(State.runtimeSeenSources)
+    wipe(State.pendingClosedLootWindows)
+    wipe(State.bossChestLootCounted)
+
+    State.lootHadInventoryFullError = false
+    State.recentEncounterBoss = nil
+    State.recentEncounterTime = 0
+    State.currentLootWasAuto = false
+    State.session = {
+        mobs = {}
+    }
+
+    State.dataRevision = (State.dataRevision or 0) + 1
+
+    return true
+end
+
 ns.DB = {
     EnsureDB = EnsureDB,
     GetCurrentCharacterKey = GetCurrentCharacterKey,
@@ -310,4 +339,5 @@ ns.DB = {
     GetSortedProfileNames = GetSortedProfileNames,
     GetCharactersUsingProfile = GetCharactersUsingProfile,
     DeleteProfile = DeleteProfile,
+    ResetActiveProfileData = ResetActiveProfileData,
 }
