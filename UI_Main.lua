@@ -111,8 +111,8 @@ searchBox:SetText(SEARCH_PLACEHOLDER)
 searchBox:SetTextColor(0.6, 0.6, 0.6)
 searchBox:Hide()
 
-searchBox:SetFrameStrata("DIALOG")
-searchBox:SetFrameLevel(searchButton:GetFrameLevel() + 10)
+searchBox:SetFrameStrata(frame:GetFrameStrata())
+searchBox:SetFrameLevel(searchButton:GetFrameLevel() + 2)
 
 if searchBox.Left then searchBox.Left:SetDrawLayer("OVERLAY") end
 if searchBox.Middle then searchBox.Middle:SetDrawLayer("OVERLAY") end

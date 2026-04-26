@@ -7,6 +7,10 @@ local Places = ns.Places or {}
 local ProcessClearedLootSlot
 local ProcessClearedLootSlotFromWindow
 
+local function MarkDataChanged()
+    State.dataRevision = (State.dataRevision or 0) + 1
+end
+
 local function EnsureMobEntry(mobKey, displayName)
     DB.EnsureDB()
 
@@ -65,6 +69,7 @@ end
 local function IncrementLootCount(mobKey, displayName)
     local entry = EnsureMobEntry(mobKey, displayName)
     entry.lootCount = (entry.lootCount or 0) + 1
+    MarkDataChanged()
 end
 
 local function IncrementSessionLootCount(mobKey, displayName)
@@ -96,6 +101,7 @@ local function AddLootToMob(mobKey, displayName, itemName, quantity, itemLink, f
     if itemLink then
         entry.items[itemName].link = itemLink
     end
+    MarkDataChanged()
 end
 
 local function AddLootToSession(mobKey, displayName, itemName, quantity)
@@ -125,6 +131,7 @@ local function AddGoldToMob(mobKey, displayName, copper)
 
     local entry = EnsureMobEntry(mobKey, displayName)
     entry.gold = (entry.gold or 0) + copper
+    MarkDataChanged()
 end
 
 local function AddGoldToSession(mobKey, displayName, copper)
@@ -144,6 +151,7 @@ local function AddPlaceToMob(mobKey, displayName, placeKey)
     local entry = EnsureMobEntry(mobKey, displayName)
     entry.places = entry.places or {}
     entry.places[placeKey] = (entry.places[placeKey] or 0) + 1
+    MarkDataChanged()
 end
 
 local function GetSourceTypeFromGUID(guid)
@@ -379,7 +387,7 @@ local function GetRecentEncounterBoss()
     end
 
     local now = GetTime() or 0
-    if now - (State.recentEncounterTime or 0) > 120 then
+    if now - (State.recentEncounterTime or 0) > 30 then
         return nil
     end
 
@@ -497,7 +505,7 @@ local function GetRecentEncounterBossFromWindow(lootWindow)
     end
 
     local now = GetTime() or 0
-    if now - (lootWindow.recentEncounterTime or 0) > 120 then
+    if now - (lootWindow.recentEncounterTime or 0) > 30 then
         return nil
     end
 
@@ -670,8 +678,12 @@ ProcessClearedLootSlotFromWindow = function(lootWindow, slot)
     end
 
     lootWindow.pendingLootSlots[slot] = nil
-    if ns.UI and ns.UI.UpdateDisplay then
-        ns.UI.UpdateDisplay()
+    if ns.UI then
+        if ns.UI.RequestUpdateDisplay then
+            ns.UI.RequestUpdateDisplay()
+        elseif ns.UI.UpdateDisplay then
+            ns.UI.UpdateDisplay()
+        end
     end
 end
 

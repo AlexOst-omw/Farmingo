@@ -27,3 +27,4 @@ ns.State.lootHadInventoryFullError = false
 ns.State.pendingClosedLootWindows = ns.State.pendingClosedLootWindows or {}
 ns.State.isSearchOpen = false
 ns.State.searchQuery = ""
+ns.State.dataRevision = ns.State.dataRevision or 0

@@ -17,6 +17,29 @@ local sessionGoldValue = UI.sessionGoldValue
 
 local UpdateDisplay
 
+local updateQueued = false
+
+local cachedDuplicateNameMap = nil
+local cachedDuplicateNameRevision = -1
+
+local cachedFooterRevision = -1
+
+local function RequestUpdateDisplay()
+    if updateQueued then
+        return
+    end
+
+    updateQueued = true
+
+    C_Timer.After(0.05, function()
+        updateQueued = false
+
+        if UpdateDisplay then
+            UpdateDisplay()
+        end
+    end)
+end
+
 local COLOR_WORLD = "|cffd8b25d"
 local COLOR_CONTINENT = "|cffffb347"
 local COLOR_PLACE = "|cffffff99"
@@ -1484,11 +1507,22 @@ end
 UpdateDisplay = function()
     DB.EnsureDB()
 
-    local duplicateNameMap = Loot.BuildDuplicateMobNameMap()
     local profileMobs = DB.GetProfileMobs()
+    local dataRevision = State.dataRevision or 0
+
+    if cachedDuplicateNameRevision ~= dataRevision then
+        cachedDuplicateNameMap = Loot.BuildDuplicateMobNameMap()
+        cachedDuplicateNameRevision = dataRevision
+    end
 
     UpdateToggleAllButton(profileMobs)
-    UpdateFooterTotals(profileMobs)
+
+    if cachedFooterRevision ~= dataRevision then
+        UpdateFooterTotals(profileMobs)
+        cachedFooterRevision = dataRevision
+    end
+
+    local duplicateNameMap = cachedDuplicateNameMap
 
     if State.currentViewMode == "place" then
         RenderPlaceView(profileMobs, duplicateNameMap)
@@ -1503,5 +1537,6 @@ end
 
 UI.AreAnyMobsExpanded = AreAnyMobsExpanded
 UI.UpdateDisplay = UpdateDisplay
+UI.RequestUpdateDisplay = RequestUpdateDisplay
 UI.RenderMobView = RenderMobView
 UI.RenderPlaceView = RenderPlaceView
