@@ -220,11 +220,15 @@ local function RememberMobNameByKey(mobKey, name)
         return
     end
 
-    if not name or name == "Unknown" then
+    if not name then
         return
     end
 
     if not IsSafeDisplayString(name) then
+        return
+    end
+
+    if name == "" or name == "Unknown" then
         return
     end
 
@@ -303,7 +307,15 @@ local function GetMobIDFromKey(mobKey)
 end
 
 local function GetSafeDisplayName(mobKey, preferredName)
-    if IsSafeDisplayString(preferredName) then
+    local preferredIsUseful =
+        IsSafeDisplayString(preferredName)
+        and preferredName ~= ""
+        and preferredName ~= "Unknown"
+        and preferredName ~= "Unknown Mob"
+        and not preferredName:find("^Unknown Mob %(")
+        and not preferredName:find("^Unknown Vehicle %(")
+
+    if preferredIsUseful then
         return preferredName
     end
 

@@ -292,6 +292,8 @@ local function SetCharacterProfile(profileName)
         mobs = {}
     }
 
+    State.dataRevision = (State.dataRevision or 0) + 1
+    
     return true
 end
 

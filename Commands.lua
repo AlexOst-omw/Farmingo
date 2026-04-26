@@ -144,6 +144,7 @@ SlashCmdList["FARMINGO"] = function(msg)
             FarmingoDB.characterProfile[DB.GetCurrentCharacterKey()] = "Default"
 
             State.session = { mobs = {} }
+            State.dataRevision = (State.dataRevision or 0) + 1
             pendingReset = false
 
             RefreshAll()
