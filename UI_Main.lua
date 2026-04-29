@@ -589,6 +589,8 @@ frame:SetScript("OnEvent", function(self, event, ...)
                 mobs = {}
             }
 
+            State.dataRevision = (State.dataRevision or 0) + 1
+
             if ns.Minimap_OnAddonLoaded then
                 ns.Minimap_OnAddonLoaded()
             end

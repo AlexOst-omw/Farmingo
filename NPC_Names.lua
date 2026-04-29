@@ -5697,3 +5697,7 @@ ns.NPCNames[229363] = "Imperious Soundwave"
 ns.NPCNames[238496] = "Slots Patron (238496)"
 ns.NPCNames[229282] = "Wild Thunderbolt"
 ns.NPCNames[238237] = "Darkfuse Thug (238237)"
+
+--missed
+
+ns.NPCNames[11661] = "Flamewaker"
