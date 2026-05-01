@@ -20,6 +20,13 @@ FarmingoDB = FarmingoDB or {
     }
 }
 
+local function GetCurrentCharacterKey()
+    local name = UnitName("player") or "Unknown"
+    local realm = GetRealmName() or "Unknown"
+    realm = realm:gsub("%s+", "")
+    return name .. "-" .. realm
+end
+
 local function EnsureDB()
     FarmingoDB = FarmingoDB or {}
 
@@ -81,7 +88,7 @@ local function EnsureDB()
         FarmingoDB.mobNamesByKey = nil
     end
 
-    local characterKey = ns.DB.GetCurrentCharacterKey()
+    local characterKey = GetCurrentCharacterKey()
     if not FarmingoDB.characterProfile[characterKey] or FarmingoDB.characterProfile[characterKey] == "" then
         FarmingoDB.characterProfile[characterKey] = "Default"
     end
@@ -95,13 +102,6 @@ local function EnsureDB()
     local activeProfile = FarmingoDB.profiles[activeProfileName]
     activeProfile.mobs = activeProfile.mobs or {}
     activeProfile.mobNamesByKey = activeProfile.mobNamesByKey or {}
-end
-
-local function GetCurrentCharacterKey()
-    local name = UnitName("player") or "Unknown"
-    local realm = GetRealmName() or "Unknown"
-    realm = realm:gsub("%s+", "")
-    return name .. "-" .. realm
 end
 
 local function GetActiveProfileName()
@@ -326,6 +326,24 @@ local function ResetActiveProfileData()
     return true
 end
 
+local function RebuildTooltipIndex()
+    local index = {}
+    for _, mobData in pairs(GetProfileMobs()) do
+        for _, itemData in pairs(mobData.items or {}) do
+            if itemData.link and itemData.firstDropLootCount then
+                local itemID = itemData.link:match("item:(%d+)")
+                if itemID then
+                    local id = tonumber(itemID)
+                    if not index[id] or itemData.firstDropLootCount < index[id] then
+                        index[id] = itemData.firstDropLootCount
+                    end
+                end
+            end
+        end
+    end
+    return index
+end
+
 ns.DB = {
     EnsureDB = EnsureDB,
     GetCurrentCharacterKey = GetCurrentCharacterKey,
@@ -342,4 +360,5 @@ ns.DB = {
     GetCharactersUsingProfile = GetCharactersUsingProfile,
     DeleteProfile = DeleteProfile,
     ResetActiveProfileData = ResetActiveProfileData,
+    RebuildTooltipIndex = RebuildTooltipIndex,
 }

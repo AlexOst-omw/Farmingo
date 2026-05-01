@@ -761,25 +761,21 @@ local function GetItemIDFromLink(itemLink)
     return nil
 end
 
-local function GetFirstDropLootCountForItem(itemLink, itemID)
-    DB.EnsureDB()
+local tooltipIndex = nil
+local tooltipIndexRevision = -1
 
+local function GetFirstDropLootCountForItem(itemLink, itemID)
     local targetItemID = itemID or GetItemIDFromLink(itemLink)
     if not targetItemID then
         return nil
     end
 
-    for _, mobData in pairs(DB.GetProfileMobs()) do
-        for _, itemData in pairs(mobData.items or {}) do
-            local storedItemID = GetItemIDFromLink(itemData.link)
-
-            if storedItemID == targetItemID and itemData.firstDropLootCount then
-                return itemData.firstDropLootCount
-            end
-        end
+    if tooltipIndex == nil or tooltipIndexRevision ~= State.dataRevision then
+        tooltipIndex = DB.RebuildTooltipIndex()
+        tooltipIndexRevision = State.dataRevision
     end
 
-    return nil
+    return tooltipIndex[targetItemID]
 end
 
 local function AddFarmingoTooltipLine(tooltip, itemLink, itemID)

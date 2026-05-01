@@ -263,6 +263,7 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
         zones = {},
         dungeons = {},
         raids = {},
+        scenarios = {},
     }
 
     local placeLootTotals = {}
@@ -279,6 +280,9 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
 
     local raidLootTotal = 0
     local raidGoldTotal = 0
+
+    local scenarioLootTotal = 0
+    local scenarioGoldTotal = 0
 
     for mobKey, data in pairs(profileMobs) do
         if Loot.MobMatchesSearch(mobKey, data) then
@@ -311,6 +315,10 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
                 elseif placeType == "raid" then
                     placeData.raids[placeKey] = placeData.raids[placeKey] or {}
                     placeData.raids[placeKey][mobKey] = data
+
+                elseif placeType == "scenario" then
+                    placeData.scenarios[placeKey] = placeData.scenarios[placeKey] or {}
+                    placeData.scenarios[placeKey][mobKey] = data
                 end
 
                 if placeType == "zone" then
@@ -328,6 +336,10 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
                 elseif placeType == "raid" then
                     raidLootTotal = raidLootTotal + lootCount
                     raidGoldTotal = raidGoldTotal + goldCount
+
+                elseif placeType == "scenario" then
+                    scenarioLootTotal = scenarioLootTotal + lootCount
+                    scenarioGoldTotal = scenarioGoldTotal + goldCount
                 end
             end
         end
@@ -1218,6 +1230,235 @@ local RenderPlaceView = function(profileMobs, duplicateNameMap)
 
                             if #itemNames == 0 then
                                 rowIndex = AddNoItemsRow(rowIndex, "        |cff888888No items recorded|r")
+                            else
+                                for _, itemName in ipairs(itemNames) do
+                                    local itemData = mobData.items[itemName]
+
+                                    local itemText = itemData.link or itemName
+                                    if State.searchQuery ~= "" and not itemData.link then
+                                        itemText = Loot.HighlightSearchMatch(itemText)
+                                    end
+
+                                    rowIndex = AddItemRow(
+                                        rowIndex,
+                                        "            " .. itemText,
+                                        itemData.link,
+                                        itemData.firstDropLootCount,
+                                        "x" .. tostring(itemData.count or 0)
+                                    )
+                                end
+                            end
+
+                            local mobGold = mobData.gold or 0
+                            if mobGold > 0 then
+                                rowIndex = AddInfoRow(rowIndex, "          |cffd8b25dTotal gold:|r", Loot.FormatMoney(mobGold))
+                            end
+
+                            local sessionData = State.session.mobs[mobKey]
+                            local sessionLootCount = 0
+                            local sessionGold = 0
+
+                            if sessionData then
+                                sessionLootCount = sessionData.lootCount or 0
+                                sessionGold = sessionData.gold or 0
+                            end
+
+                            local sessionRow = GetRow(rowIndex)
+                            sessionRow:Show()
+                            sessionRow.isMobRow = false
+                            sessionRow.mobKey = nil
+                            sessionRow.itemLink = nil
+                            sessionRow.text:SetText("          |cff66ccffThis session loots:|r")
+                            sessionRow.countText:SetText("|cff66ccff" .. sessionLootCount .. " loots|r")
+                            sessionRow:SetScript("OnClick", nil)
+                            sessionRow:SetScript("OnEnter", nil)
+                            sessionRow:SetScript("OnLeave", function(self)
+                                self.highlight:Hide()
+                            end)
+
+                            rowIndex = rowIndex + 1
+
+                            if sessionGold > 0 then
+                                local sessionGoldRow = GetRow(rowIndex)
+                                sessionGoldRow:Show()
+                                sessionGoldRow.isMobRow = false
+                                sessionGoldRow.mobKey = nil
+                                sessionGoldRow.itemLink = nil
+                                sessionGoldRow.text:SetText("          |cff66ccffThis session gold:|r")
+                                sessionGoldRow.countText:SetText("|cffffffff" .. Loot.FormatMoney(sessionGold) .. "|r")
+                                sessionGoldRow:SetScript("OnClick", nil)
+                                sessionGoldRow:SetScript("OnEnter", nil)
+                                sessionGoldRow:SetScript("OnLeave", function(self)
+                                    self.highlight:Hide()
+                                end)
+
+                                rowIndex = rowIndex + 1
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    local scenarioKeys = {}
+    for placeKey in pairs(placeData.scenarios) do
+        table.insert(scenarioKeys, placeKey)
+    end
+
+    SortKeysByLootTotal(
+        scenarioKeys,
+        function(placeKey)
+            return placeLootTotals[placeKey] or 0
+        end,
+        function(placeKey)
+            return GetPlaceNameFromKey(placeKey)
+        end
+    )
+
+    if #scenarioKeys > 0 then
+        local expandedScenarios = FarmingoDB.ui.expandedWorlds["Scenarios"]
+
+        local scenariosTotalLoots = scenarioLootTotal
+
+        local scenariosRow = GetRow(rowIndex)
+        scenariosRow:Show()
+        scenariosRow.isMobRow = false
+        scenariosRow.mobKey = nil
+        scenariosRow.itemLink = nil
+        scenariosRow.worldName = "Scenarios"
+        scenariosRow.text:SetText((expandedScenarios and "[-] " or "[+] ") .. "Scenarios")
+        scenariosRow.countText:SetText(scenariosTotalLoots .. " loots")
+        scenariosRow:SetScript("OnClick", function(self)
+            DB.EnsureDB()
+            FarmingoDB.ui.expandedWorlds["Scenarios"] = not FarmingoDB.ui.expandedWorlds["Scenarios"]
+            UpdateDisplay()
+        end)
+        scenariosRow:SetScript("OnEnter", function(self)
+            self.highlight:Show()
+        end)
+        scenariosRow:SetScript("OnLeave", function(self)
+            self.highlight:Hide()
+        end)
+
+        rowIndex = rowIndex + 1
+
+        if expandedScenarios then
+
+            local scenariosTotalGold = scenarioGoldTotal
+
+            rowIndex = AddInfoRow(rowIndex, "    |cffd8b25dTotal gold:|r", Loot.FormatMoney(scenariosTotalGold))
+
+            for _, placeKey in ipairs(scenarioKeys) do
+                local _, _, _, placeName = strsplit("|", placeKey)
+                local expandedPlace = FarmingoDB.ui.expandedPlaces[placeKey]
+
+                local placeTotalLoots = placeLootTotals[placeKey] or 0
+
+                local placeRow = GetRow(rowIndex)
+                placeRow:Show()
+                placeRow.isMobRow = false
+                placeRow.mobKey = nil
+                placeRow.itemLink = nil
+                placeRow.placeKey = placeKey
+                placeRow.text:SetText("    " .. (expandedPlace and "[-] " or "[+] ") .. (placeName or placeKey))
+                placeRow.countText:SetText(placeTotalLoots .. " loots")
+                placeRow:SetScript("OnClick", function(self)
+                    DB.EnsureDB()
+                    FarmingoDB.ui.expandedPlaces[self.placeKey] = not FarmingoDB.ui.expandedPlaces[self.placeKey]
+                    UpdateDisplay()
+                end)
+                placeRow:SetScript("OnEnter", function(self)
+                    self.highlight:Show()
+                end)
+                placeRow:SetScript("OnLeave", function(self)
+                    self.highlight:Hide()
+                end)
+
+                rowIndex = rowIndex + 1
+
+                if expandedPlace then
+
+                    local placeTotalGold = placeGoldTotals[placeKey] or 0
+
+                    rowIndex = AddInfoRow(rowIndex, "        |cffd8b25dTotal gold:|r", Loot.FormatMoney(placeTotalGold))
+
+                    local mobList = {}
+
+                    for mobKey, mobData in pairs(placeData.scenarios[placeKey]) do
+                        local placeLootCount = 0
+                        if mobData.places and mobData.places[placeKey] then
+                            placeLootCount = mobData.places[placeKey]
+                        end
+
+                        table.insert(mobList, {
+                            key = mobKey,
+                            data = mobData,
+                            count = placeLootCount
+                        })
+                    end
+
+                    table.sort(mobList, function(a, b)
+                        if a.count == b.count then
+                            local nameA = Loot.GetSafeDisplayName(a.key, a.data.displayName)
+                            local nameB = Loot.GetSafeDisplayName(b.key, b.data.displayName)
+                            return nameA < nameB
+                        end
+                        return a.count > b.count
+                    end)
+
+                    for _, mob in ipairs(mobList) do
+                        local mobKey = mob.key
+                        local mobData = mob.data
+                        local placeLootCount = mob.count
+
+                        local mobRow = GetRow(rowIndex)
+                        mobRow:Show()
+                        mobRow.isMobRow = false
+                        mobRow.mobKey = mobKey
+                        mobRow.itemLink = nil
+
+                        local expandedMob = FarmingoDB.ui.expandedMobs[mobKey]
+                        local prefix = expandedMob and "        [-] " or "        [+] "
+                        local mobDisplayName = Loot.GetDisplayNameWithDuplicateSuffix(mobKey, mobData.displayName, duplicateNameMap)
+
+                        if State.searchQuery ~= "" then
+                            mobDisplayName = Loot.HighlightSearchMatch(mobDisplayName)
+                        end
+
+                        if Loot.IsFallbackMobName(mobDisplayName) then
+                            mobRow.text:SetText(prefix .. "|cff888888" .. mobDisplayName .. "|r")
+                        else
+                            mobRow.text:SetText(prefix .. mobDisplayName)
+                        end
+
+                        local lootWord = (placeLootCount == 1) and "loot" or "loots"
+                        mobRow.countText:SetText(placeLootCount .. " " .. lootWord)
+                        mobRow:SetScript("OnClick", function(self)
+                            DB.EnsureDB()
+                            FarmingoDB.ui.expandedMobs[self.mobKey] = not FarmingoDB.ui.expandedMobs[self.mobKey]
+                            UpdateDisplay()
+                        end)
+                        mobRow:SetScript("OnEnter", function(self)
+                            self.highlight:Show()
+                        end)
+                        mobRow:SetScript("OnLeave", function(self)
+                            self.highlight:Hide()
+                        end)
+
+                        rowIndex = rowIndex + 1
+
+                        if expandedMob then
+                            local itemNames = {}
+
+                            for itemName in pairs(mobData.items or {}) do
+                                table.insert(itemNames, itemName)
+                            end
+
+                            table.sort(itemNames)
+
+                            if #itemNames == 0 then
+                                rowIndex = AddNoItemsRow(rowIndex, "          |cff888888No items recorded|r")
                             else
                                 for _, itemName in ipairs(itemNames) do
                                     local itemData = mobData.items[itemName]

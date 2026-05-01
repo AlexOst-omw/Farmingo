@@ -103,10 +103,39 @@ local PlaceAliases = {
         worldName = "Azeroth",
         continentName = "Eastern Kingdoms",
     },
+    
+    ["Atal'Aman"] = {
+        placeType = "zone",
+        placeName = "Zul'Aman - Atal'Aman",
+        worldName = "Azeroth",
+        continentName = "Quel'Thalas",
+    },
+
+    ["Revantusk Sedge"] = {
+        placeType = "zone",
+        placeName = "Zul'Aman - Revantusk Sedge",
+        worldName = "Azeroth",
+        continentName = "Quel'Thalas",
+    },
+
+    ["Zul'Aman"] = {
+        placeType = "zone",
+        placeName = "Zul'Aman - Ritual Site",
+        worldName = "Azeroth",
+        continentName = "Quel'Thalas",
+    },
+
+    ["Parhelion Plaza"] = {
+        placeType = "scenario",
+        placeName = "Isle of Quel'Danas - Parhelion Plaza",
+        worldName = "Azeroth",
+        continentName = "Quel'Thalas",
+    },
 }
 
 local CosmicContinentWorldOverrides = {
     ["Quel'Thalas"] = "Azeroth",
+    ["Zul'Aman"] = "Azeroth",
 }
 
 local function NormalizeWorldName(continentName, rawWorldName)
@@ -215,6 +244,11 @@ local function GetCurrentPlaceInfo()
         placeName = instanceName or autoZoneName or "Unknown Raid"
         worldName = "Raids"
         continentName = "Raids"
+    elseif instanceType == "scenario" then
+        placeType = "scenario"
+        placeName = instanceName or autoZoneName or "Unknown Scenario"
+        worldName = "Scenarios"
+        continentName = "Scenarios"
     else
         placeType = "zone"
         placeName = autoZoneName or zoneName

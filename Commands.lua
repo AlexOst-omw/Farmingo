@@ -147,6 +147,19 @@ SlashCmdList["FARMINGO"] = function(msg)
             State.dataRevision = (State.dataRevision or 0) + 1
             pendingReset = false
 
+            wipe(State.observedMobNamesByKey)
+            wipe(State.runtimeSeenSources)
+            wipe(State.pendingLootSlots)
+            wipe(State.attemptedLootSlots)
+            wipe(State.clearedSourcesThisWindow)
+            wipe(State.sourceLootNumberThisWindow)
+            wipe(State.pendingClosedLootWindows)
+            wipe(State.bossChestLootCounted)
+            State.lootHadInventoryFullError = false
+            State.recentEncounterBoss = nil
+            State.recentEncounterTime = 0
+            State.currentLootWasAuto = false
+
             RefreshAll()
             Print("all saved data deleted.")
         else
